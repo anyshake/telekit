@@ -104,11 +104,23 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		dc, err := pc.CreateDataChannel(c.api.DataChannel, nil)
+		dc, err := pc.CreateDataChannel(c.api.DataChannel, c.options.DataChannelInit)
 		if err != nil {
 			_ = pc.Close()
 			return err
 		}
+		c.stateMu.Lock()
+		if c.bufferedAmountLowCh == nil {
+			c.bufferedAmountLowCh = make(chan struct{}, 1)
+		}
+		c.stateMu.Unlock()
+		dc.SetBufferedAmountLowThreshold(uint64(c.options.MaxSendBufferSize / 2))
+		dc.OnBufferedAmountLow(func() {
+			select {
+			case c.bufferedAmountLowCh <- struct{}{}:
+			default:
+			}
+		})
 		c.setPeerConnection(pc, dc)
 		break
 	case <-ctx.Done():

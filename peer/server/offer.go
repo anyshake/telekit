@@ -48,6 +48,18 @@ func (s *Server) handleOffer(conn *Connection, msg *peer.Message) error {
 			return
 		}
 		conn.setDataChannel(dc)
+		conn.stateMu.Lock()
+		if conn.bufferedAmountLowCh == nil {
+			conn.bufferedAmountLowCh = make(chan struct{}, 1)
+		}
+		conn.stateMu.Unlock()
+		dc.SetBufferedAmountLowThreshold(uint64(s.options.MaxSendBufferSize / 2))
+		dc.OnBufferedAmountLow(func() {
+			select {
+			case conn.bufferedAmountLowCh <- struct{}{}:
+			default:
+			}
+		})
 
 		dc.OnOpen(func() {
 			conn.markEstablished()

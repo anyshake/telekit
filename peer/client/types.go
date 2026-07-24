@@ -45,6 +45,9 @@ type Options struct {
 	// OnDataChannelMessage. It avoids retaining a duplicate stream copy when
 	// the application does not use Read.
 	ReceiveEventsOnly bool
+	// DataChannelInit allows customizing the WebRTC DataChannel configuration,
+	// such as Ordered, MaxPacketLifeTime, MaxRetransmits, etc., for unreliable transmission.
+	DataChannelInit *webrtc.DataChannelInit
 	// Additional data used when
 	// encrypting
 	EncryptionAAD []byte
@@ -91,6 +94,7 @@ type Client struct {
 	pc      *webrtc.PeerConnection
 	dc      *webrtc.DataChannel
 	stateMu sync.RWMutex
+	bufferedAmountLowCh chan struct{}
 
 	dataChunkBuf dataChunk
 	writeMu      sync.Mutex

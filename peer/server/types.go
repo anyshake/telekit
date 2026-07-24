@@ -92,6 +92,7 @@ type Connection struct {
 
 	pc      *webrtc.PeerConnection
 	dc      *webrtc.DataChannel
+	bufferedAmountLowCh chan struct{}
 	stateMu sync.RWMutex
 
 	dataChunkBuf dataChunk

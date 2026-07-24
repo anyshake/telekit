@@ -68,6 +68,13 @@ func (c *Client) Write(p []byte) (int, error) {
 }
 
 func (c *Client) waitForSendCapacity(dc *webrtc.DataChannel, next int) error {
+	c.stateMu.Lock()
+	if c.bufferedAmountLowCh == nil {
+		c.bufferedAmountLowCh = make(chan struct{}, 1)
+	}
+	ch := c.bufferedAmountLowCh
+	c.stateMu.Unlock()
+
 	for dc.BufferedAmount()+uint64(next) > uint64(c.options.MaxSendBufferSize) {
 		if c.writeTimedOut() {
 			return os.ErrDeadlineExceeded
@@ -75,7 +82,29 @@ func (c *Client) waitForSendCapacity(dc *webrtc.DataChannel, next int) error {
 		if dc.ReadyState() != webrtc.DataChannelStateOpen {
 			return errors.New("data channel closed")
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-ch:
+		default:
+		}
+		var timeoutCh <-chan time.Time
+		c.deadlineMu.RLock()
+		deadline := c.writeDeadline
+		c.deadlineMu.RUnlock()
+		if !deadline.IsZero() {
+			dur := time.Until(deadline)
+			if dur <= 0 {
+				return os.ErrDeadlineExceeded
+			}
+			timer := time.NewTimer(dur)
+			defer timer.Stop()
+			timeoutCh = timer.C
+		}
+		select {
+		case <-ch:
+		case <-timeoutCh:
+			return os.ErrDeadlineExceeded
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	return nil
 }
