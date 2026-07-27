@@ -25,6 +25,7 @@ require (
 	github.com/samber/lo v1.52.0
 	github.com/sandertv/go-raknet v1.15.1
 	github.com/shirou/gopsutil/v4 v4.26.6
+	github.com/stretchr/testify v1.11.1
 	github.com/xtaci/kcp-go/v5 v5.6.13
 	golang.org/x/crypto v0.54.0
 	golang.org/x/exp v0.0.0-20221031165847-c99f073a8326
@@ -33,6 +34,7 @@ require (
 
 require (
 	github.com/centrifugal/protocol v0.16.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
@@ -56,6 +58,7 @@ require (
 	github.com/pion/turn/v5 v5.0.12 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.0 // indirect
@@ -73,4 +76,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

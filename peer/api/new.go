@@ -2,6 +2,8 @@ package api
 
 import (
 	"errors"
+	"net"
+	"net/url"
 	"strings"
 
 	"github.com/anyshake/telekit/signaling"
@@ -13,11 +15,49 @@ func parseICEURI(raw string) (*stun.URI, error) {
 	if err == nil {
 		return uri, nil
 	}
-	// Accept the WebRTC-style stun://host form used by existing examples.
-	if strings.Contains(raw, "://") {
+	// Accept authority-style URLs such as turn://user:pass@host:port.
+	if !strings.Contains(raw, "://") {
+		return nil, err
+	}
+
+	parsed, parseErr := url.Parse(raw)
+	if parseErr != nil {
+		return nil, err
+	}
+
+	// Keep the legacy stun://host behavior for examples without credentials.
+	if parsed.User == nil {
 		return stun.ParseURI(strings.Replace(raw, "://", ":", 1))
 	}
-	return nil, err
+
+	if parsed.Path != "" && parsed.Path != "/" {
+		return nil, err
+	}
+
+	host := parsed.Hostname()
+	if host == "" {
+		return nil, err
+	}
+
+	normalized := parsed.Scheme + ":"
+	if port := parsed.Port(); port != "" {
+		normalized += net.JoinHostPort(host, port)
+	} else {
+		normalized += host
+	}
+	if parsed.RawQuery != "" {
+		normalized += "?" + parsed.RawQuery
+	}
+
+	uri, err = stun.ParseURI(normalized)
+	if err != nil {
+		return nil, err
+	}
+	uri.Username = parsed.User.Username()
+	if password, ok := parsed.User.Password(); ok {
+		uri.Password = password
+	}
+	return uri, nil
 }
 
 func NewAPI(roomID string, signalingServer signaling.IAdapter, opts ...Option) (*API, error) {
