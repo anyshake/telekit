@@ -1,26 +1,40 @@
 package server
 
+import "github.com/anyshake/telekit/peer"
+
 func (c *Connection) Close() error {
+	wasEstablished := false
 	c.closeOnce.Do(func() {
+		wasEstablished = c.established.Swap(false)
 		c.recvBuf.Close()
-		c.resetDataChunk()
-		c.resetPendingICE()
 		if c.owner != nil {
 			if current, ok := c.owner.connections.Get(c.sourceId); ok && current == c {
 				c.owner.connections.Del(c.sourceId)
 			}
 			c.releaseLease()
 		}
-		pc, dc := c.takePeerConnection()
-		if dc != nil {
-			c.closeErr = dc.Close()
+		transportConn := c.transportConnValue()
+		if transportConn != nil {
+			if c.closeErr == nil {
+				c.closeErr = transportConn.Close()
+			}
+			c.setTransportConn(nil)
 		}
-		if pc != nil {
-			if err := pc.Close(); c.closeErr == nil {
+		c.stateMu.Lock()
+		agent := c.iceAgent
+		c.iceAgent = nil
+		c.localAddr = peer.Addr{}
+		c.remoteAddr = peer.Addr{}
+		c.stateMu.Unlock()
+		if agent != nil {
+			if err := agent.Close(); c.closeErr == nil {
 				c.closeErr = err
 			}
 		}
 	})
+	if wasEstablished && c.owner != nil && c.owner.options.OnDisconnected != nil {
+		c.owner.options.OnDisconnected(c)
+	}
 	return c.closeErr
 }
 
@@ -40,9 +54,6 @@ func (s *Server) Close() error {
 		_ = conn.Close()
 	}
 	s.connections.Clear()
-	if s.callbackPool != nil {
-		s.callbackPool.Close()
-	}
 	if s.roomLeaseKey != "" {
 		roomOwners.CompareAndDelete(s.roomLeaseKey, s)
 		s.roomLeaseKey = ""

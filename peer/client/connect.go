@@ -1,14 +1,17 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
+	"net"
+	"time"
 
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/signaling"
-	"github.com/pion/webrtc/v4"
+	"github.com/anyshake/telekit/transports"
+	"github.com/samber/lo"
 )
 
 func (c *Client) setIsConnected(v bool) {
@@ -42,11 +45,13 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 		c.connecting = false
 		c.mu.Unlock()
 	}()
+
 	codec, err := peer.NewCodec(c.options.EncryptionType, c.psk.Key, c.options.EncryptionAAD, c.options.UseCompression)
 	if err != nil {
 		return err
 	}
 	c.serverId = ""
+	c.clearPhysicalAddrs()
 	c.signalSend.Store(0)
 	c.signalRecv.Reset()
 	succeeded := false
@@ -55,20 +60,15 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 			_ = c.Disconnect()
 		}
 	}()
-
-	// Replace the receive buffer so Read() on the new connection
-	// returns fresh data; any pending Read on the old buffer will
-	// have already returned io.EOF via Disconnect().
 	c.recvBuf.Store(peer.NewRecvBufferWithLimit(c.options.ReceiveBufferSize, nil))
-	c.startCallbackPool()
 
 	attempt, err := c.buildClientHello(codec)
 	if err != nil {
 		return err
 	}
 	handshakeCh := make(chan *serverHandshake, 1)
-	sub, err := c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageHello, func(m []byte) {
-		handshake, err := c.handleServerHello(codec, m, attempt)
+	sub, err := c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageHello, func(data []byte) {
+		handshake, err := c.handleServerHello(codec, data, attempt)
 		if err != nil {
 			return
 		}
@@ -81,213 +81,200 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 		return err
 	}
 	defer sub.Unsubscribe()
-
 	if err := c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageHello, attempt.message); err != nil {
 		return err
 	}
 	if c.options.OnClientHello != nil {
 		c.options.OnClientHello(c)
 	}
+
+	var handshake *serverHandshake
 	select {
-	case handshake := <-handshakeCh:
+	case handshake = <-handshakeCh:
 		c.codec = handshake.codec
 		c.serverId = handshake.serverID
 		if c.options.OnServerHello != nil {
 			c.options.OnServerHello(c)
 		}
-		c.signalMu.Lock()
-		c.pendingICE = nil
-		c.pendingICEBytes = 0
-		c.remoteSet = false
-		c.signalMu.Unlock()
-		pc, err := c.api.WebRTCAPI.NewPeerConnection(c.api.WebRTCConfig)
-		if err != nil {
-			return err
-		}
-		dc, err := pc.CreateDataChannel(c.api.DataChannel, c.options.DataChannelInit)
-		if err != nil {
-			_ = pc.Close()
-			return err
-		}
-		c.stateMu.Lock()
-		if c.bufferedAmountLowCh == nil {
-			c.bufferedAmountLowCh = make(chan struct{}, 1)
-		}
-		c.stateMu.Unlock()
-		dc.SetBufferedAmountLowThreshold(uint64(c.options.MaxSendBufferSize / 2))
-		dc.OnBufferedAmountLow(func() {
-			select {
-			case c.bufferedAmountLowCh <- struct{}{}:
-			default:
-			}
-		})
-		c.setPeerConnection(pc, dc)
-		break
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-
-	pc := c.peerConnection()
-	dc := c.dataChannel()
-	pc.OnICECandidate(func(cand *webrtc.ICECandidate) {
-		if cand != nil {
-			_ = c.sendICECandidate(cand.ToJSON())
+	if !lo.Contains(handshake.transports, c.options.Transport.Name()) {
+		return errors.New("requested transport is not supported by server")
+	}
+	answers := make(chan transports.ICEDescription, 1)
+	answerSub, err := c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageAnswer, func(data []byte) {
+		msg, err := c.codec.DecodeMessage(data)
+		if err != nil || msg.Header.SourceId != c.serverId || msg.Header.TargetId != c.clientId || !c.signalRecv.Accept(msg.Header.Sequence) {
+			return
 		}
-	})
-	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		switch state {
-		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
-			c.setIsConnected(false)
-			c.recvBuf.Load().Close()
-			if c.options.OnDisconnected != nil {
-				c.options.OnDisconnected(c)
-			}
-		case webrtc.ICEConnectionStateFailed:
-			c.setIsConnected(false)
-			c.recvBuf.Load().Close()
-			if c.options.OnConnectionFailed != nil {
-				c.options.OnConnectionFailed(c, errors.New("ICE connection failed"))
-			}
+		if msg.Header.Type != peer.MessageTypeICEAnswer || msg.Payload == nil || msg.Payload.ICEUsername == "" || msg.Payload.ICEPassword == "" {
+			return
 		}
-	})
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		switch state {
-		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
-			c.setIsConnected(false)
-			c.recvBuf.Load().Close()
-			if c.options.OnConnectionFailed != nil {
-				c.options.OnConnectionFailed(c, errors.New("peerconnection failed"))
-			}
-			if c.options.OnDisconnected != nil {
-				c.options.OnDisconnected(c)
-			}
-		}
-	})
-
-	openCh := make(chan struct{}, 1)
-	dc.OnOpen(func() {
-		c.setIsConnected(true)
 		select {
-		case openCh <- struct{}{}:
+		case answers <- transports.ICEDescription{UsernameFragment: msg.Payload.ICEUsername, Password: msg.Payload.ICEPassword, Candidates: append([]string(nil), msg.Payload.ICECandidates...)}:
 		default:
-		}
-		if c.options.OnDataChannelOpen != nil {
-			c.options.OnDataChannelOpen(c)
-		}
-	})
-	dc.OnClose(func() {
-		c.setIsConnected(false)
-		c.recvBuf.Load().Close()
-		if c.options.OnDataChannelClose != nil {
-			c.options.OnDataChannelClose(c)
-		}
-	})
-	dc.OnError(func(err error) {
-		c.setIsConnected(false)
-		c.recvBuf.Load().Close()
-		if c.options.OnDataChannelError != nil {
-			c.options.OnDataChannelError(c, err)
-		}
-	})
-	dc.OnMessage(func(m webrtc.DataChannelMessage) {
-		if len(m.Data) == 0 {
-			return
-		}
-
-		c.dataChunkBuf.mu.Lock()
-		defer c.dataChunkBuf.mu.Unlock()
-
-		buf := m.Data
-
-		if c.dataChunkBuf.expectedLen == 0 {
-			if len(buf) < 8 {
-				return
-			}
-			c.dataChunkBuf.expectedLen = binary.BigEndian.Uint64(buf[:8])
-			if c.dataChunkBuf.expectedLen == 0 || c.dataChunkBuf.expectedLen > uint64(c.options.MaxFrameSize) {
-				c.dataChunkBuf.expectedLen = 0
-				c.dataChunkBuf.recvBuffer = bytes.Buffer{}
-				go c.Disconnect()
-				return
-			}
-			buf = buf[8:]
-		}
-
-		if uint64(len(buf)) > c.dataChunkBuf.expectedLen-uint64(c.dataChunkBuf.recvBuffer.Len()) {
-			c.dataChunkBuf.expectedLen = 0
-			c.dataChunkBuf.recvBuffer = bytes.Buffer{}
-			go c.Disconnect()
-			return
-		}
-		c.dataChunkBuf.recvBuffer.Write(buf)
-
-		if uint64(c.dataChunkBuf.recvBuffer.Len()) >= c.dataChunkBuf.expectedLen {
-			data := c.dataChunkBuf.recvBuffer.Bytes()[:c.dataChunkBuf.expectedLen]
-			c.dataChunkBuf.recvBuffer = bytes.Buffer{}
-			c.dataChunkBuf.expectedLen = 0
-
-			raw, err := c.codec.DecodeWithDecryptionLimit(data, c.options.MaxFrameSize)
-			if err != nil {
-				return
-			}
-			if len(raw) > c.options.MaxFrameSize {
-				go c.Disconnect()
-				return
-			}
-			if !c.options.ReceiveEventsOnly {
-				if err := c.recvBuf.Load().Write(raw); err != nil {
-					go c.Disconnect()
-					return
-				}
-			}
-			if c.options.OnDataChannelMessage != nil {
-				if !c.submitDataCallback(raw) {
-					go c.Disconnect()
-				}
-			}
-		}
-	})
-
-	sub, err = c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageAnswer, func(b []byte) {
-		msg, err := c.codec.DecodeMessage(b)
-		if err != nil {
-			return
-		}
-		if msg.Header.SourceId != c.serverId || msg.Header.TargetId != c.clientId {
-			return
-		}
-		if !c.signalRecv.Accept(msg.Header.Sequence) {
-			return
-		}
-
-		switch msg.Header.Type {
-		case peer.MessageTypeAnswer:
-			if msg.Payload.SDP == nil || msg.Payload.SDP.Type != webrtc.SDPTypeAnswer {
-				return
-			}
-			if c.handleAnswer(msg) == nil && c.options.OnServerAnswer != nil {
-				c.options.OnServerAnswer(c, msg.Payload.SDP)
-			}
-		case peer.MessageTypeICE:
-			if msg.Payload.ICE == nil {
-				return
-			}
-			_ = c.handleICECandidate(msg)
 		}
 	})
 	if err != nil {
 		return err
 	}
-	defer sub.Unsubscribe()
+	defer answerSub.Unsubscribe()
 
-	if err := c.sendOffer(); err != nil {
+	if err := c.publishTransportSelect(); err != nil {
 		return err
 	}
+	agent, err := transports.NewICEAgent(c.api.ICEURLs)
+	if err != nil {
+		return err
+	}
+	c.stateMu.Lock()
+	c.iceAgent = agent
+	c.stateMu.Unlock()
+	description, err := transports.GatherICE(agent)
+	if err != nil {
+		return err
+	}
+	if err := c.publishICEOffer(description); err != nil {
+		return err
+	}
+
+	var remote transports.ICEDescription
 	select {
-	case <-openCh:
-		succeeded = true
-		return nil
+	case remote = <-answers:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	endpointLocal, endpointRemote := c.LocalAddr(), c.RemoteAddr()
+	iceConn, err := transports.DialICE(ctx, agent, remote)
+	if err != nil {
+		return err
+	}
+	c.setPhysicalAddrs(iceConn.LocalAddr(), iceConn.RemoteAddr())
+	selected := c.options.Transport
+	dataConn, err := selected.Dial(ctx, transports.ICEEndpoint(iceConn, endpointLocal, endpointRemote))
+	if err != nil {
+		_ = iceConn.Close()
+		return err
+	}
+	c.setTransportConn(dataConn)
+	c.lastTransportRead.Store(time.Now().UnixNano())
+	go c.readTransport(dataConn, selected.Name() == "raw_udp")
+	go c.monitorTransport(dataConn)
+	c.setIsConnected(true)
+	succeeded = true
+	return nil
+}
+
+func (c *Client) publishTransportSelect() error {
+	data, err := c.codec.EncodeMessage(&peer.Message{
+		Header:  &peer.Header{SourceId: c.clientId, TargetId: c.serverId, Type: peer.MessageTypeTransportSelect, Sequence: c.signalSend.Add(1)},
+		Payload: &peer.Payload{Transport: c.options.Transport.Name()},
+	})
+	if err != nil {
+		return err
+	}
+	return c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageOffer, data)
+}
+
+func (c *Client) publishICEOffer(description transports.ICEDescription) error {
+	data, err := c.codec.EncodeMessage(&peer.Message{
+		Header:  &peer.Header{SourceId: c.clientId, TargetId: c.serverId, Type: peer.MessageTypeICEOffer, Sequence: c.signalSend.Add(1)},
+		Payload: &peer.Payload{ICEUsername: description.UsernameFragment, ICEPassword: description.Password, ICECandidates: description.Candidates},
+	})
+	if err != nil {
+		return err
+	}
+	return c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageOffer, data)
+}
+
+func (c *Client) readTransport(conn net.Conn, packetMode bool) {
+	if packetMode {
+		c.readRawTransport(conn)
+		return
+	}
+
+	var header [8]byte
+	for {
+		if _, err := io.ReadFull(conn, header[:]); err != nil {
+			break
+		}
+		c.lastTransportRead.Store(time.Now().UnixNano())
+		length := binary.BigEndian.Uint64(header[:])
+		if length == 0 {
+			if err := c.sendHeartbeat(); err != nil {
+				break
+			}
+			continue
+		}
+		if length > uint64(c.options.MaxFrameSize) {
+			break
+		}
+		frame := make([]byte, length)
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			break
+		}
+		raw, err := c.codec.DecodeWithDecryptionLimit(frame, c.options.MaxFrameSize)
+		if err != nil || len(raw) > c.options.MaxFrameSize {
+			break
+		}
+		if err := c.recvBuf.Load().Write(raw); err != nil {
+			break
+		}
+	}
+	c.finishTransport(conn)
+}
+
+func (c *Client) readRawTransport(conn net.Conn) {
+	packet := make([]byte, c.options.MaxFrameSize+8)
+	for {
+		n, err := conn.Read(packet)
+		if err != nil {
+			break
+		}
+		c.lastTransportRead.Store(time.Now().UnixNano())
+		if n < 8 {
+			break
+		}
+		length := binary.BigEndian.Uint64(packet[:8])
+		if length == 0 {
+			if n != 8 {
+				break
+			}
+			if err := c.sendHeartbeat(); err != nil {
+				break
+			}
+			continue
+		}
+		if length > uint64(c.options.MaxFrameSize) || int(length) != n-8 {
+			break
+		}
+		raw, err := c.codec.DecodeWithDecryptionLimit(packet[8:n], c.options.MaxFrameSize)
+		if err != nil || len(raw) > c.options.MaxFrameSize {
+			break
+		}
+		if err := c.recvBuf.Load().Write(raw); err != nil {
+			break
+		}
+	}
+	c.finishTransport(conn)
+}
+
+func (c *Client) monitorTransport(conn net.Conn) {
+	ticker := time.NewTicker(transportKeepaliveInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if c.transportConnValue() != conn {
+			return
+		}
+		lastRead := time.Unix(0, c.lastTransportRead.Load())
+		if time.Since(lastRead) >= transportKeepaliveTimeout {
+			_ = c.finishTransport(conn)
+			return
+		}
+		if err := c.sendHeartbeat(); err != nil {
+			_ = c.finishTransport(conn)
+			return
+		}
 	}
 }

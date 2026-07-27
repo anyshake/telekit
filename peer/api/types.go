@@ -2,17 +2,14 @@ package api
 
 import (
 	"github.com/anyshake/telekit/signaling"
-	"github.com/pion/webrtc/v4"
+	"github.com/pion/stun/v3"
 )
-
-const DEFAULT_DATACHANNEL = "stream"
 
 type Option func(*API) error
 
 type API struct {
 	RoomId          string
-	DataChannel     string
 	SignalingServer signaling.IAdapter
-	WebRTCConfig    webrtc.Configuration
-	WebRTCAPI       *webrtc.API
+	// ICEURLs is used by the standalone Pion ICE agent after signaling.
+	ICEURLs []*stun.URI
 }

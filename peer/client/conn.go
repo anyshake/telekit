@@ -5,19 +5,42 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/peer"
-	"github.com/pion/webrtc/v4"
 )
-
-var _ net.Conn = (*Client)(nil)
 
 func (c *Client) Close() error { return c.Disconnect() }
 
 func (c *Client) LocalAddr() net.Addr {
-	return peer.Addr{RoomID: c.api.RoomId, PeerID: c.clientId}
+	c.stateMu.RLock()
+	address := c.localAddr
+	c.stateMu.RUnlock()
+	if address.RoomID == "" {
+		return peer.Addr{RoomID: c.api.RoomId, PeerID: c.clientId}
+	}
+	return address
 }
 
 func (c *Client) RemoteAddr() net.Addr {
-	return peer.Addr{RoomID: c.api.RoomId, PeerID: c.serverId}
+	c.stateMu.RLock()
+	address := c.remoteAddr
+	c.stateMu.RUnlock()
+	if address.RoomID == "" {
+		return peer.Addr{RoomID: c.api.RoomId, PeerID: c.serverId}
+	}
+	return address
+}
+
+func (c *Client) setPhysicalAddrs(local, remote net.Addr) {
+	c.stateMu.Lock()
+	c.localAddr = peer.AddrFromNet(c.api.RoomId, c.clientId, local)
+	c.remoteAddr = peer.AddrFromNet(c.api.RoomId, c.serverId, remote)
+	c.stateMu.Unlock()
+}
+
+func (c *Client) clearPhysicalAddrs() {
+	c.stateMu.Lock()
+	c.localAddr = peer.Addr{}
+	c.remoteAddr = peer.Addr{}
+	c.stateMu.Unlock()
 }
 
 func (c *Client) SetDeadline(t time.Time) error {
@@ -34,6 +57,9 @@ func (c *Client) SetWriteDeadline(t time.Time) error {
 	c.deadlineMu.Lock()
 	c.writeDeadline = t
 	c.deadlineMu.Unlock()
+	if conn := c.transportConnValue(); conn != nil {
+		return conn.SetWriteDeadline(t)
+	}
 	return nil
 }
 
@@ -44,30 +70,43 @@ func (c *Client) writeTimedOut() bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (c *Client) setPeerConnection(pc *webrtc.PeerConnection, dc *webrtc.DataChannel) {
+func (c *Client) setTransportConn(conn net.Conn) {
 	c.stateMu.Lock()
-	c.pc, c.dc = pc, dc
+	c.transportConn = conn
 	c.stateMu.Unlock()
 }
 
-func (c *Client) dataChannel() *webrtc.DataChannel {
-	c.stateMu.RLock()
-	dc := c.dc
-	c.stateMu.RUnlock()
-	return dc
-}
-
-func (c *Client) peerConnection() *webrtc.PeerConnection {
-	c.stateMu.RLock()
-	pc := c.pc
-	c.stateMu.RUnlock()
-	return pc
-}
-
-func (c *Client) takePeerConnection() (*webrtc.PeerConnection, *webrtc.DataChannel) {
+// finishTransport detaches only conn's transport generation. A reader from an
+// old connection must not tear down a newer connection established after a
+// reconnect.
+func (c *Client) finishTransport(conn net.Conn) bool {
 	c.stateMu.Lock()
-	pc, dc := c.pc, c.dc
-	c.pc, c.dc = nil, nil
+	if c.transportConn != conn {
+		c.stateMu.Unlock()
+		return false
+	}
+	c.transportConn = nil
+	agent := c.iceAgent
+	c.iceAgent = nil
+	c.localAddr = peer.Addr{}
+	c.remoteAddr = peer.Addr{}
 	c.stateMu.Unlock()
-	return pc, dc
+
+	c.setIsConnected(false)
+	c.recvBuf.Load().Close()
+	_ = conn.Close()
+	if agent != nil {
+		_ = agent.Close()
+	}
+	if c.options.OnDisconnected != nil {
+		c.options.OnDisconnected(c)
+	}
+	return true
+}
+
+func (c *Client) transportConnValue() net.Conn {
+	c.stateMu.RLock()
+	conn := c.transportConn
+	c.stateMu.RUnlock()
+	return conn
 }

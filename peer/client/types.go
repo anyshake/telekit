@@ -1,79 +1,57 @@
 package client
 
 import (
-	"bytes"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
+	"github.com/anyshake/telekit/transports"
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
 
 const (
 	DEFAULT_TIMEOUT               = 30 * time.Second
-	MAX_CHUNK_SIZE                = 60000
 	DEFAULT_MAX_FRAME_SIZE        = 4 << 20
 	DEFAULT_MAX_PENDING_ICE       = 128
 	DEFAULT_MAX_PENDING_ICE_BYTES = 256 << 10
-	DEFAULT_CALLBACK_WORKERS      = 2
-	DEFAULT_CALLBACK_QUEUE        = 64
-	DEFAULT_MAX_SEND_BUFFER       = 1 << 20
-	DEFAULT_MAX_CALLBACK_BYTES    = 16 << 20
+	transportKeepaliveInterval    = 5 * time.Second
+	transportKeepaliveTimeout     = 15 * time.Second
 )
 
 type Options struct {
-	// TimeFunc returns the current time
-	// for generating timestamps
-	// during handshaking
+	// TimeFunc returns the current time used to generate handshake timestamps.
 	TimeFunc func() time.Time
-	// Timeout is the maximum time to wait
-	// for a connection to be established.
+	// Timeout is the maximum time to wait for a connection to be established.
 	Timeout time.Duration
-	// Compress data before sending
-	UseCompression     bool
-	MaxFrameSize       int
-	ReceiveBufferSize  int
-	MaxSendBufferSize  int
-	MaxPendingICE      int
+	// Transport selects the data transport negotiated after ICE. Nil defaults to
+	// the raw UDP transport.
+	Transport transports.ITransport
+	// UseCompression enables zstd compression before encryption.
+	UseCompression bool
+	// MaxFrameSize is the maximum decoded encrypted transport frame size.
+	MaxFrameSize int
+	// ReceiveBufferSize is the maximum unread application data retained by Read.
+	ReceiveBufferSize int
+	// MaxPendingICE limits the number of ICE candidates buffered per connection.
+	MaxPendingICE int
+	// MaxPendingICEBytes limits the bytes used by buffered ICE candidates.
 	MaxPendingICEBytes int
-	CallbackWorkers    int
-	CallbackQueueSize  int
-	MaxCallbackBytes   int64
-	// ReceiveEventsOnly delivers incoming application data only through
-	// OnDataChannelMessage. It avoids retaining a duplicate stream copy when
-	// the application does not use Read.
-	ReceiveEventsOnly bool
-	// DataChannelInit allows customizing the WebRTC DataChannel configuration,
-	// such as Ordered, MaxPacketLifeTime, MaxRetransmits, etc., for unreliable transmission.
-	DataChannelInit *webrtc.DataChannelInit
-	// Additional data used when
-	// encrypting
+	// EncryptionAAD is additional authenticated data included in each frame.
 	EncryptionAAD []byte
-	// Encryption type
+	// EncryptionType selects the frame cipher. Empty uses XChaCha20-Poly1305.
 	EncryptionType string
-	// Callback when client hello
-	// message is sent
+	// OnClientHello is called after ClientHello is sent.
 	OnClientHello func(*Client)
-	// Callback when server hello
-	// message is received
-	OnServerHello        func(*Client)
-	OnOfferSent          func(*Client, *webrtc.SessionDescription)
-	OnServerAnswer       func(*Client, *webrtc.SessionDescription)
-	OnICECandidateSent   func(*Client, webrtc.ICECandidateInit)
-	OnConnectionFailed   func(*Client, error)
-	OnDisconnected       func(*Client)
-	OnDataChannelOpen    func(*Client)
-	OnDataChannelClose   func(*Client)
-	OnDataChannelMessage func(*Client, []byte)
-	OnDataChannelError   func(*Client, error)
-}
-
-type dataChunk struct {
-	mu          sync.Mutex
-	expectedLen uint64
-	recvBuffer  bytes.Buffer
+	// OnServerHello is called after a valid ServerHello is received.
+	OnServerHello func(*Client)
+	// OnConnectionFailed is called when connection establishment fails.
+	OnConnectionFailed func(*Client, error)
+	// OnDisconnected is called after an established connection is lost.
+	OnDisconnected func(*Client)
 }
 
 type Client struct {
@@ -84,31 +62,30 @@ type Client struct {
 	options  *Options
 	codec    *peer.Codec
 
-	remoteSet       bool
+	signalMu   sync.Mutex
+	signalSend atomic.Uint64
+	signalRecv peer.ReplayWindow
+	// Kept only for decoding compatibility with pre-ICE callers. New handshakes
+	// exchange a complete ICE description and never use this queue.
 	pendingICE      []webrtc.ICECandidateInit
 	pendingICEBytes int
-	signalMu        sync.Mutex
-	signalSend      atomic.Uint64
-	signalRecv      peer.ReplayWindow
 
-	pc      *webrtc.PeerConnection
-	dc      *webrtc.DataChannel
-	stateMu sync.RWMutex
-	bufferedAmountLowCh chan struct{}
+	transportConn     net.Conn
+	lastTransportRead atomic.Int64
+	iceAgent          *ice.Agent
+	localAddr         peer.Addr
+	remoteAddr        peer.Addr
+	stateMu           sync.RWMutex
 
-	dataChunkBuf dataChunk
-	writeMu      sync.Mutex
+	writeMu sync.Mutex
 
 	// recvBuf is the TCP-like receive buffer. Use Read() to consume data.
 	// Replaced with a fresh buffer on each ConnectWithContext call.
 	recvBuf atomic.Pointer[peer.RecvBuffer]
 
-	mu             sync.RWMutex
-	connected      bool
-	connecting     bool
-	deadlineMu     sync.RWMutex
-	writeDeadline  time.Time
-	callbackMu     sync.Mutex
-	callbackPool   *peer.CallbackPool
-	callbackBudget *peer.ByteBudget
+	mu            sync.RWMutex
+	connected     bool
+	connecting    bool
+	deadlineMu    sync.RWMutex
+	writeDeadline time.Time
 }

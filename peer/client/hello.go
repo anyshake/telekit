@@ -11,8 +11,9 @@ import (
 )
 
 type serverHandshake struct {
-	serverID string
-	codec    *peer.Codec
+	serverID   string
+	codec      *peer.Codec
+	transports []string
 }
 
 type clientHandshake struct {
@@ -91,7 +92,7 @@ func (c *Client) handleServerHello(handshakeCodec *peer.Codec, data []byte, atte
 		return nil, err
 	}
 
-	return &serverHandshake{serverID: msg.Header.SourceId, codec: sessionCodec}, nil
+	return &serverHandshake{serverID: msg.Header.SourceId, codec: sessionCodec, transports: append([]string(nil), msg.Payload.Transports...)}, nil
 }
 
 func (c *Client) buildClientHello(handshakeCodec *peer.Codec) (*clientHandshake, error) {

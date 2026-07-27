@@ -1,31 +1,35 @@
 package client
 
 import (
-	"bytes"
-
 	"github.com/anyshake/telekit/peer"
+	"github.com/anyshake/telekit/signaling"
 )
 
 func (c *Client) Disconnect() error {
+	if c.isConnected() {
+		// KCP and SCTP do not reliably propagate a local socket close through
+		// every ICE path. Tell the server which authenticated session to remove
+		// before tearing down the data transport.
+		_ = c.publishDisconnect()
+	}
 	c.setIsConnected(false)
 	c.recvBuf.Load().Close()
-	c.stopCallbackPool()
-	c.dataChunkBuf.mu.Lock()
-	c.dataChunkBuf.expectedLen = 0
-	c.dataChunkBuf.recvBuffer = bytes.Buffer{}
-	c.dataChunkBuf.mu.Unlock()
-	c.signalMu.Lock()
-	c.pendingICE = nil
-	c.pendingICEBytes = 0
-	c.signalMu.Unlock()
 
-	pc, dc := c.takePeerConnection()
+	c.stateMu.Lock()
+	transportConn := c.transportConn
+	c.transportConn = nil
+	agent := c.iceAgent
+	c.iceAgent = nil
+	c.localAddr = peer.Addr{}
+	c.remoteAddr = peer.Addr{}
+	c.stateMu.Unlock()
+
 	var closeErr error
-	if dc != nil {
-		closeErr = dc.Close()
+	if transportConn != nil {
+		closeErr = transportConn.Close()
 	}
-	if pc != nil {
-		if err := pc.Close(); closeErr == nil {
+	if agent != nil {
+		if err := agent.Close(); closeErr == nil {
 			closeErr = err
 		}
 	}
@@ -33,42 +37,25 @@ func (c *Client) Disconnect() error {
 	return closeErr
 }
 
-func (c *Client) startCallbackPool() {
-	c.callbackMu.Lock()
-	if c.callbackPool != nil {
-		c.callbackPool.Close()
+func (c *Client) publishDisconnect() error {
+	c.stateMu.RLock()
+	serverID := c.serverId
+	codec := c.codec
+	c.stateMu.RUnlock()
+	if serverID == "" || codec == nil {
+		return nil
 	}
-	if c.options.OnDataChannelMessage != nil {
-		c.callbackPool = peer.NewCallbackPool(c.options.CallbackWorkers, c.options.CallbackQueueSize)
-	} else {
-		c.callbackPool = nil
+	data, err := codec.EncodeMessage(&peer.Message{
+		Header: &peer.Header{
+			SourceId: c.clientId,
+			TargetId: serverID,
+			Type:     peer.MessageTypeDisconnect,
+			Sequence: c.signalSend.Add(1),
+		},
+		Payload: &peer.Payload{},
+	})
+	if err != nil {
+		return err
 	}
-	c.callbackMu.Unlock()
-}
-
-func (c *Client) stopCallbackPool() {
-	c.callbackMu.Lock()
-	pool := c.callbackPool
-	c.callbackPool = nil
-	c.callbackMu.Unlock()
-	pool.Close()
-}
-
-func (c *Client) submitDataCallback(data []byte) bool {
-	c.callbackMu.Lock()
-	pool := c.callbackPool
-	if pool == nil || !c.callbackBudget.Reserve(len(data)) {
-		c.callbackMu.Unlock()
-		return false
-	}
-	release := func() { c.callbackBudget.Release(len(data)) }
-	ok := pool.SubmitWithCancel(func() {
-		defer release()
-		c.options.OnDataChannelMessage(c, data)
-	}, release)
-	if !ok {
-		release()
-	}
-	c.callbackMu.Unlock()
-	return ok
+	return c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageOffer, data)
 }

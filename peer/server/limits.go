@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"sync/atomic"
 	"time"
 )
@@ -30,6 +29,7 @@ func (s *Server) reserveConnection() bool {
 }
 
 func (c *Connection) markEstablished() {
+	c.established.Store(true)
 	if c.pendingLease.Swap(false) {
 		c.owner.pendingHandshakes.Add(-1)
 	}
@@ -69,44 +69,4 @@ func (c *Connection) stopHandshakeTimer() {
 		c.handshakeTimer = nil
 	}
 	c.handshakeMu.Unlock()
-}
-
-func (s *Server) submitDataCallback(conn *Connection, data []byte) bool {
-	if s.callbackPool == nil || !s.bufferBudget.Reserve(len(data)) {
-		return false
-	}
-	release := func() { s.bufferBudget.Release(len(data)) }
-	ok := s.callbackPool.SubmitWithCancel(func() {
-		defer release()
-		s.options.OnDataChannelMessage(conn, data)
-	}, release)
-	if !ok {
-		release()
-	}
-	return ok
-}
-
-func (c *Connection) resetDataChunkLocked() {
-	if c.dataChunkBuf.reserved > 0 && c.owner != nil {
-		c.owner.bufferBudget.Release(c.dataChunkBuf.reserved)
-	}
-	c.dataChunkBuf.reserved = 0
-	c.dataChunkBuf.expectedLen = 0
-	c.dataChunkBuf.recvBuffer = bytes.Buffer{}
-}
-
-func (c *Connection) resetDataChunk() {
-	c.dataChunkBuf.mu.Lock()
-	c.resetDataChunkLocked()
-	c.dataChunkBuf.mu.Unlock()
-}
-
-func (c *Connection) resetPendingICE() {
-	c.signalMu.Lock()
-	if c.pendingICEBytes > 0 && c.owner != nil {
-		c.owner.bufferBudget.Release(c.pendingICEBytes)
-	}
-	c.pendingICE = nil
-	c.pendingICEBytes = 0
-	c.signalMu.Unlock()
 }

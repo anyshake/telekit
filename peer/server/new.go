@@ -9,6 +9,8 @@ import (
 	"github.com/alphadose/haxmap"
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
+	"github.com/anyshake/telekit/transports"
+	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
 	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -21,9 +23,6 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	}
 	if api.SignalingServer == nil {
 		return nil, errors.New("signaling server adapter is not set")
-	}
-	if api.WebRTCAPI == nil {
-		return nil, errors.New("WebRTC api is nil")
 	}
 	if options == nil {
 		return nil, errors.New("server options are nil")
@@ -41,6 +40,26 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		return nil, errors.New("invalid Ed25519 server identity key")
 	}
 	options.IdentityKey = append(ed25519.PrivateKey(nil), options.IdentityKey...)
+	if options.Transport != nil {
+		if len(options.Transports) != 0 {
+			return nil, errors.New("server transport and transports cannot both be set")
+		}
+		options.Transports = []transports.ITransport{options.Transport}
+	} else if len(options.Transports) == 0 {
+		options.Transports = []transports.ITransport{transportrawudp.New()}
+	} else {
+		options.Transports = append([]transports.ITransport(nil), options.Transports...)
+	}
+	seenTransports := make(map[string]struct{}, len(options.Transports))
+	for _, transport := range options.Transports {
+		if transport == nil || transport.Name() == "" {
+			return nil, errors.New("unsupported server transport")
+		}
+		if _, exists := seenTransports[transport.Name()]; exists {
+			return nil, errors.New("duplicate server transport")
+		}
+		seenTransports[transport.Name()] = struct{}{}
+	}
 	if options.LRUSize == 0 {
 		options.LRUSize = DEFAULT_LRU_SIZE
 	}
@@ -55,9 +74,6 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	}
 	if options.ReceiveBufferSize == 0 {
 		options.ReceiveBufferSize = peer.DefaultReceiveBufferSize
-	}
-	if options.MaxSendBufferSize == 0 {
-		options.MaxSendBufferSize = DEFAULT_MAX_SEND_BUFFER
 	}
 	if options.MaxBufferedBytes == 0 {
 		options.MaxBufferedBytes = DEFAULT_MAX_BUFFERED
@@ -83,20 +99,12 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	if options.HelloRateBurst == 0 {
 		options.HelloRateBurst = 200
 	}
-	if options.CallbackWorkers == 0 {
-		options.CallbackWorkers = DEFAULT_CALLBACK_WORKERS
-	}
-	if options.CallbackQueueSize == 0 {
-		options.CallbackQueueSize = DEFAULT_CALLBACK_QUEUE
-	}
 	if options.MaxFrameSize < 1024 || options.ReceiveBufferSize < options.MaxFrameSize ||
-		options.MaxSendBufferSize < MAX_CHUNK_SIZE ||
 		options.MaxBufferedBytes < int64(options.ReceiveBufferSize) || options.MaxPendingICE < 1 ||
 		options.MaxPendingICEBytes < 1 ||
 		options.MaxConnections < 1 || options.MaxPendingHandshakes < 1 ||
 		options.MaxPendingHandshakes > options.MaxConnections || options.HandshakeTimeout <= 0 ||
-		options.HelloRateLimit <= 0 || options.HelloRateBurst < 1 ||
-		options.CallbackWorkers < 1 || options.CallbackQueueSize < 1 {
+		options.HelloRateLimit <= 0 || options.HelloRateBurst < 1 {
 		return nil, errors.New("invalid server resource limits")
 	}
 	if options.UseCompression && options.MaxFrameSize > compression.MaxDecodedSize {
@@ -107,9 +115,6 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	}
 	if len(options.EncryptionAAD) == 0 {
 		options.EncryptionAAD = []byte("telekit/v1")
-	}
-	if options.ReceiveEventsOnly && options.OnDataChannelMessage == nil {
-		return nil, errors.New("ReceiveEventsOnly requires OnDataChannelMessage")
 	}
 
 	nonceCache, err := lru.New[string, int64](options.LRUSize)
@@ -133,9 +138,6 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		closeCh:      make(chan struct{}),
 		bufferBudget: peer.NewByteBudget(options.MaxBufferedBytes),
 		helloLimiter: rate.NewLimiter(rate.Limit(options.HelloRateLimit), options.HelloRateBurst),
-	}
-	if options.OnDataChannelMessage != nil {
-		server.callbackPool = peer.NewCallbackPool(options.CallbackWorkers, options.CallbackQueueSize)
 	}
 	return server, nil
 }

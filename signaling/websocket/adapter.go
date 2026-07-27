@@ -1,5 +1,3 @@
-// Package websocket implements signaling over a room-oriented WebSocket
-// relay. Each room is one URL path segment below the configured endpoint.
 package websocket
 
 import (

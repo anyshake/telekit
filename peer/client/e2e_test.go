@@ -17,6 +17,7 @@ import (
 	"github.com/anyshake/telekit/peer/client"
 	peerserver "github.com/anyshake/telekit/peer/server"
 	"github.com/anyshake/telekit/signaling"
+	transportkcp "github.com/anyshake/telekit/transports/transport_kcp"
 )
 
 type memoryBus struct {
@@ -83,6 +84,7 @@ func TestEncryptedNetConnRoundTrip(t *testing.T) {
 	listener, err := peerserver.NewServer(serverAPI, &peerserver.Options{
 		KeyProvider:    peer.StaticKeyring{"client-one": key},
 		IdentityKey:    serverIdentityKey,
+		Transport:      transportkcp.DefaultTransport(),
 		UseCompression: true,
 	})
 	if err != nil {
@@ -95,6 +97,7 @@ func TestEncryptedNetConnRoundTrip(t *testing.T) {
 	second, err := peerserver.NewServer(serverAPI, &peerserver.Options{
 		KeyProvider: peer.StaticKeyring{"client-one": key},
 		IdentityKey: serverIdentityKey,
+		Transport:   transportkcp.DefaultTransport(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +113,7 @@ func TestEncryptedNetConnRoundTrip(t *testing.T) {
 	}
 	conn, err := client.NewClient(peer.PreSharedKey{ClientID: "client-one", Key: key, ServerPublicKey: serverPublicKey}, clientAPI, &client.Options{
 		Timeout:        10 * time.Second,
+		Transport:      transportkcp.DefaultTransport(),
 		UseCompression: true,
 	})
 	if err != nil {

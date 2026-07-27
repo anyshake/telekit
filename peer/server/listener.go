@@ -6,10 +6,8 @@ import (
 	"github.com/anyshake/telekit/peer"
 )
 
-var _ net.Listener = (*Server)(nil)
-
-// Accept returns the next fully authenticated client after its reliable data
-// channel is open. Connections from different clients are never bridged.
+// Accept returns the next fully authenticated client after its negotiated
+// transport is established. Connections from different clients are never bridged.
 func (s *Server) Accept() (net.Conn, error) {
 	select {
 	case <-s.closeCh:

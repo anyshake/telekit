@@ -19,11 +19,15 @@ func ICECandidateSize(candidate *webrtc.ICECandidateInit) int {
 type MessageType string
 
 const (
-	MessageTypeClientHello MessageType = "client_hello"
-	MessageTypeServerHello MessageType = "server_hello"
-	MessageTypeOffer       MessageType = "offer"
-	MessageTypeAnswer      MessageType = "answer"
-	MessageTypeICE         MessageType = "ice"
+	MessageTypeClientHello     MessageType = "client_hello"
+	MessageTypeServerHello     MessageType = "server_hello"
+	MessageTypeOffer           MessageType = "offer"
+	MessageTypeAnswer          MessageType = "answer"
+	MessageTypeICE             MessageType = "ice"
+	MessageTypeTransportSelect MessageType = "transport_select"
+	MessageTypeICEOffer        MessageType = "ice_offer"
+	MessageTypeICEAnswer       MessageType = "ice_answer"
+	MessageTypeDisconnect      MessageType = "disconnect"
 )
 
 type Header struct {
@@ -46,7 +50,13 @@ type Payload struct {
 	HandshakeRoomID    string
 	HandshakeClientID  string
 	Timestamp          []byte
-	Data               any
+	// Transports is populated in ServerHello. Transport is the client choice.
+	Transports    []string
+	Transport     string
+	ICEUsername   string
+	ICEPassword   string
+	ICECandidates []string
+	Data          any
 }
 
 type Message struct {

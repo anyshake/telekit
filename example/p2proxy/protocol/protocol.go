@@ -1,0 +1,40 @@
+package protocol
+
+import (
+	"net"
+	"sync"
+	"sync/atomic"
+)
+
+const (
+	frameOpen byte = iota + 1
+	frameOpenOK
+	frameOpenError
+	frameData
+	frameEOF
+	frameClose
+
+	frameHeaderSize = 9
+	maxFramePayload = 64 << 10
+	maxTargetLength = 4 << 10
+)
+
+var ErrClosed = net.ErrClosed
+
+type Request struct {
+	Address string
+	Stream  *Stream
+}
+
+type Session struct {
+	conn net.Conn
+
+	writeMu   sync.Mutex
+	streamsMu sync.Mutex
+	streams   map[uint32]*Stream
+	nextID    atomic.Uint32
+
+	requests  chan *Request
+	done      chan struct{}
+	closeOnce sync.Once
+}

@@ -1,7 +1,3 @@
-// Package signaling defines the transport-independent signaling boundary.
-// Implementations map a room and message kind to their native routing key
-// (for example an MQTT topic, NATS subject, Centrifugo channel, or WebSocket
-// path).
 package signaling
 
 import (

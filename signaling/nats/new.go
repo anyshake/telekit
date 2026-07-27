@@ -1,4 +1,3 @@
-// Package nats implements signaling.Adapter with NATS subjects.
 package nats
 
 import (

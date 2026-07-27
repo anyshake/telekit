@@ -6,6 +6,7 @@ import (
 
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
+	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
 	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 )
@@ -38,14 +39,17 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	if options.Timeout == 0 {
 		options.Timeout = DEFAULT_TIMEOUT
 	}
+	if options.Transport == nil {
+		options.Transport = transportrawudp.New()
+	}
+	if options.Transport.Name() == "" {
+		return nil, errors.New("client transport name is empty")
+	}
 	if options.MaxFrameSize == 0 {
 		options.MaxFrameSize = DEFAULT_MAX_FRAME_SIZE
 	}
 	if options.ReceiveBufferSize == 0 {
 		options.ReceiveBufferSize = peer.DefaultReceiveBufferSize
-	}
-	if options.MaxSendBufferSize == 0 {
-		options.MaxSendBufferSize = DEFAULT_MAX_SEND_BUFFER
 	}
 	if options.MaxPendingICE == 0 {
 		options.MaxPendingICE = DEFAULT_MAX_PENDING_ICE
@@ -53,27 +57,12 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	if options.MaxPendingICEBytes == 0 {
 		options.MaxPendingICEBytes = DEFAULT_MAX_PENDING_ICE_BYTES
 	}
-	if options.CallbackWorkers == 0 {
-		options.CallbackWorkers = DEFAULT_CALLBACK_WORKERS
-	}
-	if options.CallbackQueueSize == 0 {
-		options.CallbackQueueSize = DEFAULT_CALLBACK_QUEUE
-	}
-	if options.MaxCallbackBytes == 0 {
-		options.MaxCallbackBytes = DEFAULT_MAX_CALLBACK_BYTES
-	}
 	if options.MaxFrameSize < 1024 || options.ReceiveBufferSize < options.MaxFrameSize ||
-		options.MaxSendBufferSize < MAX_CHUNK_SIZE ||
-		options.MaxPendingICE < 1 || options.MaxPendingICEBytes < 1 ||
-		options.CallbackWorkers < 1 || options.CallbackQueueSize < 1 ||
-		options.MaxCallbackBytes < int64(options.MaxFrameSize) {
+		options.MaxPendingICE < 1 || options.MaxPendingICEBytes < 1 {
 		return nil, errors.New("invalid client resource limits")
 	}
 	if options.UseCompression && options.MaxFrameSize > compression.MaxDecodedSize {
 		return nil, errors.New("compressed frame size exceeds decompression safety limit")
-	}
-	if options.ReceiveEventsOnly && options.OnDataChannelMessage == nil {
-		return nil, errors.New("ReceiveEventsOnly requires OnDataChannelMessage")
 	}
 
 	codec, err := peer.NewCodec(options.EncryptionType, psk.Key, options.EncryptionAAD, options.UseCompression)
@@ -82,12 +71,11 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	}
 
 	c := &Client{
-		clientId:       psk.ClientID,
-		psk:            psk,
-		api:            api,
-		options:        options,
-		codec:          codec,
-		callbackBudget: peer.NewByteBudget(options.MaxCallbackBytes),
+		clientId: psk.ClientID,
+		psk:      psk,
+		api:      api,
+		options:  options,
+		codec:    codec,
 	}
 	c.recvBuf.Store(peer.NewRecvBufferWithLimit(options.ReceiveBufferSize, nil))
 	return c, nil

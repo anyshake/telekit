@@ -1,8 +1,8 @@
 package server
 
 import (
-	"bytes"
 	"crypto/ed25519"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,7 +11,9 @@ import (
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
 	"github.com/anyshake/telekit/signaling"
+	"github.com/anyshake/telekit/transports"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 	"golang.org/x/time/rate"
 )
@@ -26,58 +28,60 @@ const (
 	DEFAULT_MAX_CONNECTIONS       = 1024
 	DEFAULT_MAX_HANDSHAKES        = 256
 	DEFAULT_MAX_BUFFERED          = 256 << 20
-	DEFAULT_CALLBACK_WORKERS      = 4
-	DEFAULT_CALLBACK_QUEUE        = 128
-	DEFAULT_MAX_SEND_BUFFER       = 1 << 20
 )
 
 type Options struct {
-	LRUSize          int
+	// LRUSize is the capacity of the replay-protection nonce cache.
+	LRUSize int
+	// ReplayProtection is the retention period for seen handshake nonces.
 	ReplayProtection time.Duration
-	ClockSkew        time.Duration
-	KeyProvider      peer.KeyProvider
+	// ClockSkew is the allowed difference between peer and local handshake clocks.
+	ClockSkew time.Duration
+	// KeyProvider returns the PSK for the client identity in ClientHello.
+	KeyProvider peer.KeyProvider
 	// IdentityKey signs ServerHello transcripts. Clients pin the corresponding
 	// Ed25519 public key before connecting.
-	IdentityKey          ed25519.PrivateKey
-	EncryptionType       string
-	EncryptionAAD        []byte
-	UseCompression       bool
-	MaxFrameSize         int
-	ReceiveBufferSize    int
-	MaxSendBufferSize    int
-	MaxBufferedBytes     int64
-	MaxPendingICE        int
-	MaxPendingICEBytes   int
-	MaxConnections       int
+	IdentityKey ed25519.PrivateKey
+	// Transport configures one data transport. Nil defaults to raw UDP when
+	// Transports is also empty.
+	Transport transports.ITransport
+	// Transports advertises the data transports accepted after ICE.
+	Transports []transports.ITransport
+	// EncryptionType selects the frame cipher. Empty uses XChaCha20-Poly1305.
+	EncryptionType string
+	// EncryptionAAD is additional authenticated data included in each frame.
+	EncryptionAAD []byte
+	// UseCompression enables zstd compression before encryption.
+	UseCompression bool
+	// MaxFrameSize is the maximum decoded encrypted transport frame size.
+	MaxFrameSize int
+	// ReceiveBufferSize is the maximum unread application data retained by Read.
+	ReceiveBufferSize int
+	// MaxBufferedBytes is the server-wide receive and frame-reassembly budget.
+	MaxBufferedBytes int64
+	// MaxPendingICE limits the number of ICE candidates buffered per connection.
+	MaxPendingICE int
+	// MaxPendingICEBytes limits the bytes used by buffered ICE candidates.
+	MaxPendingICEBytes int
+	// MaxConnections limits the total number of accepted client connections.
+	MaxConnections int
+	// MaxPendingHandshakes limits authenticated handshakes awaiting transport setup.
 	MaxPendingHandshakes int
-	HandshakeTimeout     time.Duration
-	HelloRateLimit       float64
-	HelloRateBurst       int
-	CallbackWorkers      int
-	CallbackQueueSize    int
-	// ReceiveEventsOnly delivers incoming application data only through
-	// OnDataChannelMessage. It avoids retaining a duplicate stream copy when
-	// the application does not use net.Conn.Read. Event-only connections are
-	// not queued for Accept; lifecycle is delivered through callbacks.
-	ReceiveEventsOnly    bool
-	OnNewClientJoin      func(*haxmap.Map[string, *Connection], string) bool
-	OnNewClientReject    func(string, error)
-	OnClientOffer        func(*Connection, *webrtc.SessionDescription)
-	OnAnswerSent         func(*Connection, *webrtc.SessionDescription)
-	OnICECandidateSent   func(*Connection, webrtc.ICECandidateInit)
-	OnConnectionFailed   func(*Connection, error)
-	OnDisconnected       func(*Connection)
-	OnDataChannelOpen    func(*Connection)
-	OnDataChannelClose   func(*Connection)
-	OnDataChannelMessage func(*Connection, []byte)
-	OnDataChannelError   func(*Connection, error)
-}
-
-type dataChunk struct {
-	mu          sync.Mutex
-	expectedLen uint64
-	recvBuffer  bytes.Buffer
-	reserved    int
+	// HandshakeTimeout limits the lifetime of a pending handshake.
+	HandshakeTimeout time.Duration
+	// HelloRateLimit is the sustained ClientHello rate accepted by the server.
+	HelloRateLimit float64
+	// HelloRateBurst is the maximum initial ClientHello burst.
+	HelloRateBurst int
+	// OnNewClientJoin is called before a client enters the connection map. Return
+	// false to reject the client.
+	OnNewClientJoin func(*haxmap.Map[string, *Connection], string) bool
+	// OnNewClientReject is called when a client is rejected before connection setup.
+	OnNewClientReject func(string, error)
+	// OnConnectionFailed is called when an authenticated connection cannot be established.
+	OnConnectionFailed func(*Connection, error)
+	// OnDisconnected is called after an established connection is lost.
+	OnDisconnected func(*Connection)
 }
 
 type Connection struct {
@@ -90,34 +94,37 @@ type Connection struct {
 	clientEphemeralKey []byte
 	serverEphemeralKey []byte
 
-	pc      *webrtc.PeerConnection
-	dc      *webrtc.DataChannel
-	bufferedAmountLowCh chan struct{}
-	stateMu sync.RWMutex
+	transportConn     net.Conn
+	lastTransportRead atomic.Int64
+	established       atomic.Bool
+	iceAgent          *ice.Agent
+	localAddr         peer.Addr
+	remoteAddr        peer.Addr
+	selectedTransport string
+	pendingICEOffer   *transports.ICEDescription
+	pendingICE        []webrtc.ICECandidateInit
+	pendingICEBytes   int
+	stateMu           sync.RWMutex
 
-	dataChunkBuf dataChunk
-	writeMu      sync.Mutex
+	writeMu sync.Mutex
 
 	// recvBuf is the TCP-like receive buffer. Use Read() to consume data.
 	recvBuf *peer.RecvBuffer
 
-	remoteSet       bool
-	pendingICE      []webrtc.ICECandidateInit
-	pendingICEBytes int
-	signalMu        sync.Mutex
-	signalSend      atomic.Uint64
-	signalRecv      peer.ReplayWindow
-	serverId        string
-	roomId          string
-	deadlineMu      sync.RWMutex
-	writeDeadline   time.Time
-	owner           *Server
-	pendingLease    atomic.Bool
-	totalLease      atomic.Bool
-	handshakeMu     sync.Mutex
-	handshakeTimer  *time.Timer
-	closeOnce       sync.Once
-	closeErr        error
+	signalMu       sync.Mutex
+	signalSend     atomic.Uint64
+	signalRecv     peer.ReplayWindow
+	serverId       string
+	roomId         string
+	deadlineMu     sync.RWMutex
+	writeDeadline  time.Time
+	owner          *Server
+	pendingLease   atomic.Bool
+	totalLease     atomic.Bool
+	handshakeMu    sync.Mutex
+	handshakeTimer *time.Timer
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 type Server struct {
@@ -139,7 +146,6 @@ type Server struct {
 	closeOnce         sync.Once
 	roomLeaseKey      string
 	bufferBudget      *peer.ByteBudget
-	callbackPool      *peer.CallbackPool
 	helloLimiter      *rate.Limiter
 	totalConnections  atomic.Int64
 	pendingHandshakes atomic.Int64

@@ -69,21 +69,18 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 			return nil, fmt.Errorf("timestamp from %s is outside allowed clock skew", header.SourceId)
 		}
 		if hasExisting {
-			existing.signalMu.Lock()
-			negotiating := existing.remoteSet
-			existing.signalMu.Unlock()
-			if !negotiating && existing.dataChannel() == nil &&
+			if existing.transportConnValue() == nil && existing.selectedTransport == "" &&
 				bytes.Equal(existing.clientNonce, nonce) &&
 				bytes.Equal(existing.clientEphemeralKey, message.Payload.ClientEphemeralKey) {
 				// QoS transports may duplicate an authenticated hello. Re-send the
 				// same pending session without accepting a different proof.
 				return existing, nil
 			}
-			err := fmt.Errorf("rejected duplicate connection from %s", header.SourceId)
-			if s.options.OnNewClientReject != nil {
-				s.options.OnNewClientReject(header.SourceId, err)
-			}
-			return nil, err
+			// A new hello has already been authenticated with the client's PSK.
+			// Replace the previous session so reconnect does not depend on the
+			// old transport or an asynchronous disconnect callback noticing EOF
+			// before this hello arrives.
+			_ = existing.Close()
 		}
 		if !s.isNonceAvailable(nonce) {
 			return nil, fmt.Errorf("received replayed nonce from %s", header.SourceId)
@@ -147,15 +144,10 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if err != nil {
 			return nil, err
 		}
-		pc, err := s.api.WebRTCAPI.NewPeerConnection(s.api.WebRTCConfig)
-		if err != nil {
-			return nil, err
-		}
 		conn := &Connection{
 			sourceId:           header.SourceId,
 			codec:              codec,
 			handshakeCodec:     handshakeCodec,
-			pc:                 pc,
 			sessionSalt:        sessionSalt,
 			clientNonce:        append([]byte(nil), nonce...),
 			serverNonce:        serverNonce,
@@ -207,6 +199,7 @@ func (s *Server) sendServerHello(codec *peer.Codec, sourceId string, sessionSalt
 			ClientEphemeralKey: conn.clientEphemeralKey,
 			ServerEphemeralKey: conn.serverEphemeralKey,
 			Signature:          signature,
+			Transports:         transportNames(s.options.Transports),
 		},
 		Encrypt: true,
 	})
