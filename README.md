@@ -94,7 +94,7 @@ centrifugoAdapter, _ := centrifugo.NewAdapter(
 
 Both peers must use the same base route, and Broker ACLs must authorize it. Each route segment accepts only letters, digits, underscores, and hyphens.
 
-MQTT uses QoS 1 by default and restores subscriptions after reconnecting. Reconnection restores signaling only; applications must redial a closed data transport.
+All signaling adapters expose `WithReconnectBackoff(...)`, `WithOnConnect(...)`, `WithConnectionLostHandler(...)`, and `WithReconnectingHandler(...)` (NATS also exposes `WithMaxReconnects(...)`). MQTT uses QoS 1 by default and restores subscriptions after reconnecting. Reconnection restores signaling only; applications must redial a closed data transport.
 
 ## `net.Conn` API
 

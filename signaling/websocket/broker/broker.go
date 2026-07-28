@@ -1,4 +1,4 @@
-package websocket
+package broker
 
 import (
 	"net"
@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/alphadose/haxmap"
 	"github.com/anyshake/telekit/signaling"
 	gorilla "github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
@@ -24,14 +25,19 @@ const (
 	defaultPongWait            = 60 * time.Second
 )
 
+const MaxMessageSize = 16 << 20
+
 // Broker is a room-scoped WebSocket relay. Authorization is deny-by-default;
 // production callers must supply an ACL with WithAuthorization.
 type Broker struct {
-	upgrader   gorilla.Upgrader
-	mu         sync.RWMutex
-	rooms      map[string]map[*brokerClient]struct{}
-	ipCounts   map[string]int
-	roomCounts map[string]int
+	upgrader gorilla.Upgrader
+
+	roomMu   sync.Mutex
+	countsMu sync.Mutex
+
+	rooms      *haxmap.Map[string, *roomState]
+	ipCounts   *haxmap.Map[string, int]
+	roomCounts *haxmap.Map[string, int]
 
 	authorize          func(*http.Request, string) bool
 	connectionsPerRoom int
@@ -42,6 +48,12 @@ type Broker struct {
 	messageBurst       int
 	writeTimeout       time.Duration
 	pongWait           time.Duration
+}
+
+type roomState struct {
+	mu      sync.Mutex
+	closed  bool
+	clients map[*brokerClient]struct{}
 }
 
 type outboundMessage struct {
@@ -120,9 +132,9 @@ func WithBrokerTimeouts(pongWait, writeTimeout time.Duration) BrokerOption {
 func NewBroker(opts ...BrokerOption) *Broker {
 	b := &Broker{
 		upgrader:           gorilla.Upgrader{},
-		rooms:              make(map[string]map[*brokerClient]struct{}),
-		ipCounts:           make(map[string]int),
-		roomCounts:         make(map[string]int),
+		rooms:              haxmap.New[string, *roomState](),
+		ipCounts:           haxmap.New[string, int](),
+		roomCounts:         haxmap.New[string, int](),
 		connectionsPerRoom: defaultConnectionsPerRoom,
 		connectionsPerIP:   defaultConnectionsPerIP,
 		queueMessages:      defaultClientQueueMessages,
@@ -168,15 +180,29 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeTimeout:  b.writeTimeout,
 		pongWait:      b.pongWait,
 	}
-	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadLimit(MaxMessageSize)
 	_ = conn.SetReadDeadline(time.Now().Add(b.pongWait))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(b.pongWait))
 	})
-	b.add(roomID, client)
+
+	room, err := b.ensureRoom(roomID)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	if !room.add(client) {
+		b.replaceRoom(roomID, room)
+		room, err = b.ensureRoom(roomID)
+		if err != nil || !room.add(client) {
+			_ = conn.Close()
+			return
+		}
+	}
+
 	go client.writeLoop()
 	defer func() {
-		b.remove(roomID, client)
+		b.remove(roomID, room, client)
 		client.close()
 	}()
 
@@ -201,61 +227,112 @@ func remoteIP(remoteAddr string) string {
 	return remoteAddr
 }
 
-func (b *Broker) reserve(roomID, ip string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.roomCounts[roomID] >= b.connectionsPerRoom || b.ipCounts[ip] >= b.connectionsPerIP {
+func (b *Broker) ensureRoom(roomID string) (*roomState, error) {
+	if err := signaling.ValidateRoomID(roomID); err != nil {
+		return nil, err
+	}
+	b.roomMu.Lock()
+	defer b.roomMu.Unlock()
+	if room, ok := b.rooms.Get(roomID); ok {
+		return room, nil
+	}
+	room := newRoomState()
+	b.rooms.Set(roomID, room)
+	return room, nil
+}
+
+func (b *Broker) replaceRoom(roomID string, room *roomState) {
+	b.roomMu.Lock()
+	if current, ok := b.rooms.Get(roomID); ok && current == room {
+		b.rooms.Del(roomID)
+	}
+	b.roomMu.Unlock()
+}
+
+func newRoomState() *roomState {
+	return &roomState{clients: make(map[*brokerClient]struct{})}
+}
+
+func (r *roomState) add(client *brokerClient) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return false
 	}
-	b.ipCounts[ip]++
-	b.roomCounts[roomID]++
+	r.clients[client] = struct{}{}
 	return true
 }
 
-func (b *Broker) release(roomID, ip string) {
-	b.mu.Lock()
-	if b.ipCounts[ip] <= 1 {
-		delete(b.ipCounts, ip)
-	} else {
-		b.ipCounts[ip]--
+func (r *roomState) remove(client *brokerClient) (empty bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.clients, client)
+	empty = len(r.clients) == 0
+	if empty {
+		r.closed = true
 	}
-	if b.roomCounts[roomID] <= 1 {
-		delete(b.roomCounts, roomID)
-	} else {
-		b.roomCounts[roomID]--
-	}
-	b.mu.Unlock()
+	return empty
 }
 
-func (b *Broker) add(roomID string, client *brokerClient) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.rooms[roomID] == nil {
-		b.rooms[roomID] = make(map[*brokerClient]struct{})
+func (b *Broker) remove(roomID string, room *roomState, client *brokerClient) {
+	if !room.remove(client) {
+		return
 	}
-	b.rooms[roomID][client] = struct{}{}
-}
-
-func (b *Broker) remove(roomID string, client *brokerClient) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.rooms[roomID], client)
-	if len(b.rooms[roomID]) == 0 {
-		delete(b.rooms, roomID)
+	b.roomMu.Lock()
+	if current, ok := b.rooms.Get(roomID); ok && current == room {
+		b.rooms.Del(roomID)
 	}
+	b.roomMu.Unlock()
 }
 
 func (b *Broker) broadcast(roomID string, messageType int, data []byte) {
-	b.mu.RLock()
-	clients := make([]*brokerClient, 0, len(b.rooms[roomID]))
-	for client := range b.rooms[roomID] {
+	room, ok := b.rooms.Get(roomID)
+	if !ok {
+		return
+	}
+	room.mu.Lock()
+	clients := make([]*brokerClient, 0, len(room.clients))
+	for client := range room.clients {
 		clients = append(clients, client)
 	}
-	b.mu.RUnlock()
+	room.mu.Unlock()
+
 	payload := append([]byte(nil), data...)
 	for _, client := range clients {
 		if !client.enqueue(outboundMessage{typ: messageType, data: payload}) {
 			client.close()
+		}
+	}
+}
+
+func (b *Broker) reserve(roomID, ip string) bool {
+	b.countsMu.Lock()
+	defer b.countsMu.Unlock()
+	roomCount, _ := b.roomCounts.Get(roomID)
+	ipCount, _ := b.ipCounts.Get(ip)
+	if roomCount >= b.connectionsPerRoom || ipCount >= b.connectionsPerIP {
+		return false
+	}
+	b.roomCounts.Set(roomID, roomCount+1)
+	b.ipCounts.Set(ip, ipCount+1)
+	return true
+}
+
+func (b *Broker) release(roomID, ip string) {
+	b.countsMu.Lock()
+	defer b.countsMu.Unlock()
+	if ipCount, ok := b.ipCounts.Get(ip); ok {
+		if ipCount <= 1 {
+			b.ipCounts.Del(ip)
+		} else {
+			b.ipCounts.Set(ip, ipCount-1)
+		}
+	}
+	if roomCount, ok := b.roomCounts.Get(roomID); ok {
+		if roomCount <= 1 {
+			b.roomCounts.Del(roomID)
+		} else {
+			b.roomCounts.Set(roomID, roomCount-1)
 		}
 	}
 }

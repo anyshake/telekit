@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/signaling"
+	"github.com/anyshake/telekit/signaling/websocket/broker"
 )
 
 func TestAdapterRoutesByRoomPathAndType(t *testing.T) {
-	server := httptest.NewServer(NewBroker(WithAuthorization(func(*http.Request, string) bool { return true })))
+	server := httptest.NewServer(broker.NewBroker(broker.WithAuthorization(func(*http.Request, string) bool { return true })))
 	defer server.Close()
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 

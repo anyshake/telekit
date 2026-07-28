@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	DefaultBaseTopic                  = "telekit"
-	defaultQoS                   byte = 1
-	defaultOperationTimeout           = 15 * time.Second
-	defaultReconnectMaximum           = 30 * time.Second
-	defaultDispatchQueueMessages      = 1024
-	defaultDispatchQueueBytes         = 16 << 20
+	DefaultBaseTopic             = "telekit"
+	defaultQoS                   = 1
+	defaultOperationTimeout      = 15 * time.Second
+	defaultReconnectMaximum      = 30 * time.Second
+	defaultDispatchQueueMessages = 1024
+	defaultDispatchQueueBytes    = 16 << 20
 )
 
 func NewMQTTAdapter(endpoint string, opts ...option) (signaling.IAdapter, error) {
@@ -153,6 +153,19 @@ func WithMaxReconnectInterval(interval time.Duration) option {
 			return errors.New("maximum reconnect interval must be positive")
 		}
 		cfg.brokerOpts.SetMaxReconnectInterval(interval)
+		return nil
+	}
+}
+
+// WithReconnectBackoff configures the initial retry interval and maximum
+// interval used by MQTT reconnect logic.
+func WithReconnectBackoff(minInterval, maxInterval time.Duration) option {
+	return func(cfg *config) error {
+		if minInterval <= 0 || maxInterval <= 0 || maxInterval < minInterval {
+			return errors.New("MQTT reconnect backoff must be positive and max >= min")
+		}
+		cfg.brokerOpts.SetConnectRetryInterval(minInterval)
+		cfg.brokerOpts.SetMaxReconnectInterval(maxInterval)
 		return nil
 	}
 }

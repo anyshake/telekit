@@ -2,6 +2,8 @@ package centrifugo
 
 import (
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/alphadose/haxmap"
 	"github.com/anyshake/telekit/signaling"
@@ -22,18 +24,43 @@ func NewAdapter(url string, opts ...option) (signaling.IAdapter, error) {
 		return nil, errors.New("wsURL is required")
 	}
 
+	adapter := &AdapterImpl{
+		cfg:  cfg,
+		subs: make(map[string]*haxmap.Map[int, *subscription]),
+	}
 	client := centrifuge.NewJsonClient(
 		cfg.wsURL,
 		centrifuge.Config{
-			Token: cfg.token,
+			Token:             cfg.token,
+			MinReconnectDelay: cfg.reconnectMin,
+			MaxReconnectDelay: cfg.reconnectMax,
 		},
 	)
+	client.OnConnected(func(centrifuge.ConnectedEvent) {
+		adapter.connected.Store(true)
+		if cfg.onConnect != nil {
+			cfg.onConnect()
+		}
+	})
+	client.OnConnecting(func(event centrifuge.ConnectingEvent) {
+		if adapter.connected.Load() {
+			if cfg.onConnectionLost != nil {
+				cfg.onConnectionLost(fmt.Errorf("centrifugo connection lost: code=%d reason=%s", event.Code, event.Reason))
+			}
+			if cfg.onReconnecting != nil {
+				cfg.onReconnecting()
+			}
+		}
+	})
+	client.OnDisconnected(func(event centrifuge.DisconnectedEvent) {
+		adapter.connected.Store(false)
+		if cfg.onConnectionLost != nil {
+			cfg.onConnectionLost(fmt.Errorf("centrifugo disconnected: code=%d reason=%s", event.Code, event.Reason))
+		}
+	})
 
-	return &AdapterImpl{
-		cfg:    cfg,
-		client: client,
-		subs:   make(map[string]*haxmap.Map[int, *subscription]),
-	}, nil
+	adapter.client = client
+	return adapter, nil
 }
 
 func (impl *AdapterImpl) SignalingID() string {
@@ -75,6 +102,40 @@ func WithAPIToken(apiURL, apiKey string) option {
 func WithConnectToken(token string) option {
 	return func(cfg *config) error {
 		cfg.token = token
+		return nil
+	}
+}
+
+// WithReconnectBackoff configures the minimum and maximum delay between
+// Centrifugo reconnect attempts.
+func WithReconnectBackoff(minDelay, maxDelay time.Duration) option {
+	return func(cfg *config) error {
+		if minDelay <= 0 || maxDelay <= 0 || maxDelay < minDelay {
+			return errors.New("Centrifugo reconnect backoff must be positive and max >= min")
+		}
+		cfg.reconnectMin = minDelay
+		cfg.reconnectMax = maxDelay
+		return nil
+	}
+}
+
+func WithOnConnect(handler func()) option {
+	return func(cfg *config) error {
+		cfg.onConnect = handler
+		return nil
+	}
+}
+
+func WithConnectionLostHandler(handler func(error)) option {
+	return func(cfg *config) error {
+		cfg.onConnectionLost = handler
+		return nil
+	}
+}
+
+func WithReconnectingHandler(handler func()) option {
+	return func(cfg *config) error {
+		cfg.onReconnecting = handler
 		return nil
 	}
 }

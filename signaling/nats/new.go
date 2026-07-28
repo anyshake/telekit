@@ -2,27 +2,11 @@ package nats
 
 import (
 	"errors"
-	"fmt"
-	"sync"
+	"time"
 
 	"github.com/anyshake/telekit/signaling"
 	natsgo "github.com/nats-io/nats.go"
 )
-
-type Adapter struct {
-	url         string
-	baseSubject string
-	opts        []natsgo.Option
-
-	mu sync.RWMutex
-	nc *natsgo.Conn
-}
-
-const DefaultBaseSubject = "telekit"
-
-func (a *Adapter) SignalingID() string {
-	return "nats:" + a.url + ":" + a.baseSubject
-}
 
 func NewAdapter(url string, opts ...natsgo.Option) (signaling.Adapter, error) {
 	return NewAdapterWithBaseSubject(url, DefaultBaseSubject, opts...)
@@ -38,79 +22,69 @@ func NewAdapterWithBaseSubject(url, baseSubject string, opts ...natsgo.Option) (
 	if err := signaling.ValidateRoutePrefix(baseSubject, '.'); err != nil {
 		return nil, err
 	}
-	return &Adapter{url: url, baseSubject: baseSubject, opts: opts}, nil
+	reconnectOpts := make([]natsgo.Option, 0, len(opts)+1)
+	reconnectOpts = append(reconnectOpts, natsgo.MaxReconnects(-1))
+	reconnectOpts = append(reconnectOpts, opts...)
+	return &Adapter{url: url, baseSubject: baseSubject, opts: reconnectOpts}, nil
 }
 
-func (a *Adapter) Connect() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.nc != nil && !a.nc.IsClosed() {
-		return nil
+// WithReconnectBackoff configures exponential reconnect delays for NATS.
+// NATS will continue reconnecting until MaxReconnects is reached.
+func WithReconnectBackoff(minDelay, maxDelay time.Duration) natsgo.Option {
+	return func(options *natsgo.Options) error {
+		if minDelay <= 0 || maxDelay <= 0 || maxDelay < minDelay {
+			return errors.New("NATS reconnect backoff must be positive and max >= min")
+		}
+		return natsgo.CustomReconnectDelay(func(attempt int) time.Duration {
+			delay := minDelay
+			for i := 1; i < attempt && delay < maxDelay; i++ {
+				if delay > maxDelay/2 {
+					return maxDelay
+				}
+				delay *= 2
+			}
+			if delay > maxDelay {
+				return maxDelay
+			}
+			return delay
+		})(options)
 	}
-	nc, err := natsgo.Connect(a.url, a.opts...)
-	if err != nil {
-		return err
-	}
-	a.nc = nc
-	return nil
 }
 
-func (a *Adapter) Disconnect() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.nc == nil {
-		return nil
-	}
-	a.nc.Close()
-	a.nc = nil
-	return nil
+// WithMaxReconnects configures how many reconnect attempts NATS makes. Use a
+// negative value for unlimited attempts.
+func WithMaxReconnects(max int) natsgo.Option {
+	return natsgo.MaxReconnects(max)
 }
 
-func (a *Adapter) Publish(roomID string, typ signaling.MessageType, payload []byte) error {
-	nc, subject, err := a.connectionAndSubject(roomID, typ)
-	if err != nil {
-		return err
-	}
-	return nc.Publish(subject, payload)
-}
-
-func (a *Adapter) Subscribe(roomID string, typ signaling.MessageType, handler signaling.Handler) (signaling.Subscription, error) {
-	if handler == nil {
-		return nil, errors.New("handler is nil")
-	}
-	nc, subject, err := a.connectionAndSubject(roomID, typ)
-	if err != nil {
-		return nil, err
-	}
-	sub, err := nc.Subscribe(subject, func(msg *natsgo.Msg) {
-		handler(append([]byte(nil), msg.Data...))
+func WithOnConnect(handler func()) natsgo.Option {
+	return natsgo.ConnectHandler(func(*natsgo.Conn) {
+		if handler != nil {
+			handler()
+		}
 	})
-	if err != nil {
-		return nil, err
-	}
-	if err := nc.Flush(); err != nil {
-		_ = sub.Unsubscribe()
-		return nil, err
-	}
-	return signaling.NewSubscription(sub.Unsubscribe), nil
 }
 
-func (a *Adapter) connectionAndSubject(roomID string, typ signaling.MessageType) (*natsgo.Conn, string, error) {
-	if err := signaling.ValidateRoomID(roomID); err != nil {
-		return nil, "", err
-	}
-	if err := signaling.ValidateMessageType(typ); err != nil {
-		return nil, "", err
-	}
-	a.mu.RLock()
-	nc := a.nc
-	a.mu.RUnlock()
-	if nc == nil || nc.IsClosed() {
-		return nil, "", signaling.ErrClosed
-	}
-	return nc, a.subject(roomID, typ), nil
+func WithConnectionLostHandler(handler func(error)) natsgo.Option {
+	return natsgo.DisconnectErrHandler(func(_ *natsgo.Conn, err error) {
+		if handler != nil {
+			handler(err)
+		}
+	})
 }
 
-func (a *Adapter) subject(roomID string, typ signaling.MessageType) string {
-	return fmt.Sprintf("%s.%s.%s", a.baseSubject, roomID, typ)
+func WithReconnectingHandler(handler func()) natsgo.Option {
+	return natsgo.ReconnectHandler(func(*natsgo.Conn) {
+		if handler != nil {
+			handler()
+		}
+	})
+}
+
+func WithReconnectErrorHandler(handler func(error)) natsgo.Option {
+	return natsgo.ReconnectErrHandler(func(_ *natsgo.Conn, err error) {
+		if handler != nil {
+			handler(err)
+		}
+	})
 }

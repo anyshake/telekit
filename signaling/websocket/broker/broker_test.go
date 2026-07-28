@@ -1,4 +1,4 @@
-package websocket
+package broker
 
 import (
 	"net/http"

@@ -3,6 +3,7 @@ package centrifugo
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/alphadose/haxmap"
 	"github.com/centrifugal/centrifuge-go"
@@ -11,11 +12,16 @@ import (
 type option func(*config) error
 
 type config struct {
-	wsURL       string
-	apiURL      string
-	apiKey      string
-	token       string
-	baseChannel string
+	wsURL            string
+	apiURL           string
+	apiKey           string
+	token            string
+	baseChannel      string
+	reconnectMin     time.Duration
+	reconnectMax     time.Duration
+	onConnect        func()
+	onConnectionLost func(error)
+	onReconnecting   func()
 }
 
 type subscription struct {
@@ -27,7 +33,8 @@ type AdapterImpl struct {
 
 	client *centrifuge.Client
 
-	subs   map[string]*haxmap.Map[int, *subscription]
-	mu     sync.Mutex
-	nextID atomic.Int64
+	subs      map[string]*haxmap.Map[int, *subscription]
+	mu        sync.Mutex
+	nextID    atomic.Int64
+	connected atomic.Bool
 }
