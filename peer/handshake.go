@@ -2,6 +2,7 @@ package peer
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
@@ -15,11 +16,15 @@ const (
 	HandshakeKeySize   = 32
 )
 
-func ServerIDFromPublicKey(publicKey ed25519.PublicKey) (string, error) {
-	if len(publicKey) != ed25519.PublicKeySize {
+func ServerIDFromPublicKey(publicKey crypto.PublicKey) (string, error) {
+	_publicKey, ok := publicKey.(ed25519.PublicKey)
+	if !ok {
+		return "", errors.New("invalid public key type")
+	}
+	if len(_publicKey) != ed25519.PublicKeySize {
 		return "", errors.New("invalid Ed25519 public key")
 	}
-	digest := sha256.Sum256(publicKey)
+	digest := sha256.Sum256(_publicKey)
 	return hex.EncodeToString(digest[:]), nil
 }
 

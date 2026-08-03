@@ -6,7 +6,7 @@ Telekit is a peer-to-peer transport library for Go with built-in authentication 
 
 ## Use case
 
-Telekit was built for collecting data from sensors behind NAT. The collector acts as the room server, makes outbound connections only, and does not need a public application listener. Sensors authenticate through a signaling service, use Pion ICE for hole punching, and then negotiate QUIC, KCP, SCTP, RakNet, or raw UDP.
+Telekit was built for collecting data from sensors behind NAT. The collector acts as the room server, makes outbound connections only, and does not need a public application listener. Sensors authenticate through a signaling service, use Pion ICE for hole punching, and then negotiate QUIC, KCP, SCTP, or raw UDP.
 
 Compared with a conventional public TCP/UDP service:
 
@@ -15,7 +15,7 @@ Compared with a conventional public TCP/UDP service:
 | Application listener | Publicly reachable address and port       | No public application listener                     |
 | Discovery            | Clients connect directly to the collector | Both sides connect outward to signaling            |
 | Address disclosure   | Endpoint is visible before authentication | ICE data is released only after PSK authentication |
-| Data path            | Public server socket                      | Pion ICE path plus QUIC/KCP/SCTP/RakNet/Raw UDP    |
+| Data path            | Public server socket                      | Pion ICE path plus QUIC/KCP/SCTP/Raw UDP           |
 | Go integration       | `net.Conn`                                | `net.Conn`                                         |
 
 The trade-off is extra signaling and ICE complexity. Direct connectivity is not guaranteed, and strict or symmetric NATs may require TURN.
@@ -23,19 +23,19 @@ The trade-off is extra signaling and ICE complexity. Direct connectivity is not 
 ## Architecture
 
 ```text
-                            Encrypted signaling
-                        ┌────────────────────────┐
-                        │ MQTT / NATS /          │
-                        │ Centrifugo / WebSocket │
-                        └───────────┬────────────┘
-                                    │
-                            outbound connections
-                                    │
-        ┌───────────────────────────┴───────────────────────────┐
-        │                                                       │
-sensor clients behind NAT                          collector server behind NAT
-        │                                                       │
-        └── Pion ICE >>> QUIC / KCP / SCTP / RakNet / Raw UDP ──┘
+                        Encrypted signaling
+                    ┌────────────────────────┐
+                    │ MQTT / NATS /          │
+                    │ Centrifugo / WebSocket │
+                    └───────────┬────────────┘
+                                │
+                        outbound connections
+                                │
+        ┌───────────────────────┴──────────────────────┐
+        │                                              │
+sensor clients behind NAT                 collector server behind NAT
+        │                                              │
+        └── Pion ICE >>> QUIC / KCP / SCTP / Raw UDP ──┘
 ```
 
 - A room is one logical sensor network.
@@ -120,7 +120,6 @@ _, err = io.Copy(conn, sensorReader)
 
 // Select explicitly with a transport implementation when needed:
 // &client.Options{Transport: transportkcp.New()}
-// &client.Options{Transport: transportraknet.New()}
 // nil selects the raw UDP transport.
 ```
 

@@ -17,27 +17,28 @@ type ICEDescription struct {
 	Candidates       []string
 }
 
-func NewICEAgent(urls []*stun.URI) (*ice.Agent, error) {
-	return ice.NewAgentWithOptions(
+func NewICEAgent(urls []*stun.URI, options ...ice.AgentOption) (*ice.Agent, error) {
+	defaultOptions := []ice.AgentOption{
 		ice.WithUrls(urls),
 		ice.WithNetworkTypes([]ice.NetworkType{ice.NetworkTypeUDP4, ice.NetworkTypeUDP6}),
 		ice.WithIncludeLoopback(),
 		// ICE is used as a long-lived data path. Keep the selected NAT
 		// mapping alive, but do not declare a temporarily congested path dead
 		// as quickly as the Pion defaults do.
-		ice.WithKeepaliveInterval(2*time.Second),
-		ice.WithDisconnectedTimeout(15*time.Second),
-		ice.WithFailedTimeout(60*time.Second),
+		ice.WithKeepaliveInterval(2 * time.Second),
+		ice.WithDisconnectedTimeout(15 * time.Second),
+		ice.WithFailedTimeout(60 * time.Second),
 		// A shorter check interval reduces setup latency on high RTT paths.
 		// More binding attempts make transient loss during hole punching less
 		// likely to force a full reconnect.
-		ice.WithCheckInterval(100*time.Millisecond),
+		ice.WithCheckInterval(100 * time.Millisecond),
 		ice.WithMaxBindingRequests(12),
-		ice.WithSrflxAcceptanceMinWait(150*time.Millisecond),
-	)
+		ice.WithSrflxAcceptanceMinWait(150 * time.Millisecond),
+	}
+	return ice.NewAgentWithOptions(append(defaultOptions, options...)...)
 }
 
-func GatherICE(agent *ice.Agent) (ICEDescription, error) {
+func GatherICEWithCallback(agent *ice.Agent, onCandidate func(ice.Candidate), beforeGather func() error) (ICEDescription, error) {
 	if agent == nil {
 		return ICEDescription{}, fmt.Errorf("ICE agent is nil")
 	}
@@ -49,6 +50,9 @@ func GatherICE(agent *ice.Agent) (ICEDescription, error) {
 	var candidates []string
 	gathered := make(chan struct{})
 	if err := agent.OnCandidate(func(candidate ice.Candidate) {
+		if onCandidate != nil {
+			onCandidate(candidate)
+		}
 		if candidate == nil {
 			close(gathered)
 			return
@@ -58,6 +62,11 @@ func GatherICE(agent *ice.Agent) (ICEDescription, error) {
 		candidatesMu.Unlock()
 	}); err != nil {
 		return ICEDescription{}, err
+	}
+	if beforeGather != nil {
+		if err := beforeGather(); err != nil {
+			return ICEDescription{}, err
+		}
 	}
 	if err := agent.GatherCandidates(); err != nil {
 		return ICEDescription{}, err

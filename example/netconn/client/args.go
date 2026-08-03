@@ -10,7 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 )
 
-const demoServerPublicKey = "LcVcY6+h0spdlYrPGdr7vz93t3UqUgTozriB0cwbdkM="
+const demoServerPublicKey = "2dc55c63afa1d2ca5d958acf19dafbbf3f77b7752a5204e8ceb881d1cc1b7643"
 
 type arguments struct {
 	mqttBroker        string
@@ -46,10 +46,10 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.clientId, "client-id", fmt.Sprintf("client-%s", hostId), "Unique client identity")
 	flag.StringVar(&args.preSharedKey, "secret", "change@me", "pre-shared passphrase")
 	flag.StringVar(&args.preSharedKey, "pre-shared-key", "change@me", "alias for -secret")
-	flag.StringVar(&args.serverPubKey, "server-public-key", demoServerPublicKey, "pinned Ed25519 server public key (base64)")
+	flag.StringVar(&args.serverPubKey, "server-public-key", demoServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.StringVar(&args.serverPubKey, "server-pub-key", demoServerPublicKey, "alias for -server-public-key")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "connection timeout")
-	flag.StringVar(&args.transport, "transport", "quic", "data transport selected after ICE (quic, kcp, sctp, rawudp or raknet)")
+	flag.StringVar(&args.transport, "transport", "quic", "data transport selected after ICE (quic, kcp, sctp, or rawudp)")
 	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.recvBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data")

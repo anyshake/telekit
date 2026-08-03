@@ -13,20 +13,33 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/transports/transport_quic/congestion/bbr"
+	"github.com/anyshake/telekit/transports/transport_quic/congestion/brutal"
 	quic "github.com/apernet/quic-go"
+	"github.com/apernet/quic-go/congestion"
 )
 
-func installCongestionControl(session *quic.Conn, remote net.Addr) {
+func installCongestionControl(session *quic.Conn, remote net.Addr, config *quic.Config, profile bbr.Profile, brutalBandwidth uint64) {
 	if session == nil {
 		return
 	}
-	// Hysteria's standard profile is designed for high RTT and lossy paths.
-	// It uses delivery-rate sampling plus pacing instead of the stock
-	// loss-driven controller in quic-go.
+	if brutalBandwidth > 0 {
+		session.SetCongestionControl(brutal.NewSender(brutalBandwidth))
+		return
+	}
+	initialPacketSize := bbr.GetInitialPacketSize(remote)
+	if config != nil && config.InitialPacketSize > 0 {
+		// Keep the controller's packet-sized windows consistent with quic-go's
+		// configured initial packet size. This matters when the PacketConn is an
+		// ICE adapter and its public address is not a *net.UDPAddr.
+		initialPacketSize = congestion.ByteCount(config.InitialPacketSize)
+	}
+	// Hysteria/Xray's BBR profiles are designed for high RTT and lossy paths.
+	// They use delivery-rate sampling plus pacing instead of quic-go's stock
+	// loss-driven controller.
 	session.SetCongestionControl(bbr.NewBbrSender(
 		bbr.DefaultClock{},
-		bbr.GetInitialPacketSize(remote),
-		bbr.ProfileStandard,
+		initialPacketSize,
+		profile,
 	))
 }
 

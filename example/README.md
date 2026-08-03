@@ -16,6 +16,12 @@ $ go run ./example/netconn/server -mqtt-base-topic sensors/telekit
 $ go run ./example/netconn/client -mqtt-base-topic sensors/telekit
 ```
 
+## WebSocket Relay
+
+`wsrelay` runs both Telekit endpoints through the same authorized WebSocket
+relay. See [`wsrelay/README.md`](wsrelay/README.md) for the three-process
+example and endpoint-ID configuration.
+
 ## P2P Proxy
 
 The proxy example keeps one authenticated Telekit connection per client and multiplexes SOCKS5 TCP streams over it. The client listens on `127.0.0.1:1080`; the server performs the destination TCP dials:
@@ -62,7 +68,7 @@ $ sftp -P 2222 root@127.0.0.1
 
 SSH TCP forwarding is enabled by default and can be used with `ssh -L` or `ssh -D`. Disable it on the server with `-allow-tcp-forwarding=false`.
 
-The default transport is QUIC. The server advertises QUIC, KCP, SCTP, and RakNet. One Telekit connection carries multiple SSH, SFTP, and forwarding sessions through the built-in stream multiplexer.
+The default transport is QUIC. The server advertises QUIC, KCP, and SCTP. One Telekit connection carries multiple SSH, SFTP, and forwarding sessions through the built-in stream multiplexer.
 
 PTY-backed shell sessions are compiled only on non-Windows platforms. Windows server builds reject PTY and shell requests but continue to provide SFTP and SSH TCP forwarding.
 
@@ -97,7 +103,7 @@ The examples hash `-secret` with SHA-256 to obtain a PSK. Production systems sho
 
 ## Resource controls
 
-The examples expose MQTT queue limits. `netconn` and `p2pssh` also expose generic frame and receive-buffer limits. The `p2proxy` and `p2pssh` client `-transport` value can be `quic`, `kcp`, `sctp`, or `raknet`; their servers advertise all four. `p2pdns` accepts only `raw_udp`.
+The examples expose MQTT queue limits. `netconn` and `p2pssh` also expose generic frame and receive-buffer limits. The `p2proxy` and `p2pssh` client `-transport` value can be `quic`, `kcp`, or `sctp`; their servers advertise all three. `p2pdns` accepts only `raw_udp`.
 
 Library users can pass `transports.ITransport` values directly; leaving the server transport unset defaults to raw UDP. SCTP/DataChannel tuning stays in the transport implementation.
 

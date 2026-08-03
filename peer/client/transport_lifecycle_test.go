@@ -15,13 +15,12 @@ import (
 	peerserver "github.com/anyshake/telekit/peer/server"
 	"github.com/anyshake/telekit/transports"
 	transportkcp "github.com/anyshake/telekit/transports/transport_kcp"
-	transportraknet "github.com/anyshake/telekit/transports/transport_raknet"
 	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
 	transportsctp "github.com/anyshake/telekit/transports/transport_sctp"
 )
 
 func TestTransportLifecycle(t *testing.T) {
-	for _, transportName := range []string{"kcp", "sctp", "udp", "raknet"} {
+	for _, transportName := range []string{"kcp", "sctp", "udp"} {
 		t.Run(transportName, func(t *testing.T) {
 			serverTransport := newTestTransport(transportName)
 			clientTransport := newTestTransport(transportName)
@@ -115,8 +114,6 @@ func newTestTransport(name string) transports.ITransport {
 		return transportkcp.New()
 	case "sctp":
 		return transportsctp.New()
-	case "raknet":
-		return transportraknet.New()
 	default:
 		return transportrawudp.New()
 	}

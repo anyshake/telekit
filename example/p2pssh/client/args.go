@@ -40,7 +40,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.serverPublicKey, "server-public-key", common.DefaultServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "telekit connection timeout")
 	flag.StringVar(&args.listenAddr, "listen", "127.0.0.1:2222", "local SSH/SFTP listen address")
-	flag.StringVar(&args.transportName, "transport", "quic", "transport selected after ICE (quic, kcp, sctp, or raknet)")
+	flag.StringVar(&args.transportName, "transport", "quic", "transport selected after ICE (quic, kcp, or sctp)")
 	flag.BoolVar(&args.compression, "compression", true, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data")

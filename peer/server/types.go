@@ -31,6 +31,8 @@ const (
 )
 
 type Options struct {
+	// ICEAgentOptions are passed to the Pion ICE agent created for each connection.
+	ICEAgentOptions []ice.AgentOption
 	// LRUSize is the capacity of the replay-protection nonce cache.
 	LRUSize int
 	// ReplayProtection is the retention period for seen handshake nonces.
@@ -78,6 +80,17 @@ type Options struct {
 	OnNewClientJoin func(*haxmap.Map[string, *Connection], string) bool
 	// OnNewClientReject is called when a client is rejected before connection setup.
 	OnNewClientReject func(string, error)
+	// OnICECandidate is called for each locally gathered ICE candidate.
+	OnICECandidate func(*Connection, ice.Candidate)
+	// OnICECandidateGatheringComplete is called after local ICE candidate
+	// gathering has completed.
+	OnICECandidateGatheringComplete func(*Connection)
+	// OnICEOffer is called after a valid ICE offer is received.
+	OnICEOffer func(*Connection, transports.ICEDescription)
+	// OnICEAnswer is called before the local ICE answer is published.
+	OnICEAnswer func(*Connection, transports.ICEDescription)
+	// OnConnected is called after ICE and the selected transport are connected.
+	OnConnected func(*Connection)
 	// OnConnectionFailed is called when an authenticated connection cannot be established.
 	OnConnectionFailed func(*Connection, error)
 	// OnDisconnected is called after an established connection is lost.

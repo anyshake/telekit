@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	relayws "github.com/anyshake/telekit/relays/websocket"
 	"github.com/anyshake/telekit/signaling"
 	"github.com/pion/stun/v3"
 )
@@ -111,6 +112,30 @@ func WithTURNServer(urls ...string) Option {
 			return errors.New("no valid TURN server specified")
 		}
 		api.ICEURLs = append(api.ICEURLs, valid...)
+		return nil
+	}
+}
+
+// WithWebSocketRelayServer configures a WebSocket relay as an additional ICE
+// relay candidate source. Direct host/srflx candidates and TURN remain
+// enabled unless the caller overrides candidate types through ICE options.
+func WithWebSocketRelayServer(relayBaseURL, serverID, token string) Option {
+	return func(api *API) error {
+		if serverID == "" {
+			return errors.New("websocket relay server ID is empty")
+		}
+		if token == "" {
+			return errors.New("websocket relay token is empty")
+		}
+		endpoint, err := relayws.EndpointURL(relayBaseURL, serverID)
+		if err != nil {
+			return err
+		}
+		api.webSocketRelay = &webSocketRelayConfig{
+			ServerID: serverID,
+			URL:      endpoint,
+			Token:    token,
+		}
 		return nil
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/anyshake/telekit/transports"
+	"github.com/anyshake/telekit/transports/transport_quic/congestion/bbr"
 	quic "github.com/apernet/quic-go"
 )
 
@@ -15,7 +16,9 @@ const protocolName = "telekit-quic"
 var streamPreface = []byte("telekit-quic-v1\x00")
 
 type Transport struct {
-	Config *quic.Config
+	Config          *quic.Config
+	bbrProfile      bbr.Profile
+	brutalBandwidth uint64
 }
 
 func (Transport) Name() string { return "quic" }
@@ -32,7 +35,7 @@ func (t Transport) Dial(ctx context.Context, endpoint transports.Endpoint) (net.
 	if err != nil {
 		return nil, err
 	}
-	installCongestionControl(session, endpoint.RemoteAddr)
+	installCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
 	stream, err := session.OpenStreamSync(ctx)
 	if err != nil {
 		_ = session.CloseWithError(0, "stream open failed")
@@ -61,7 +64,7 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 	if err != nil {
 		return nil, err
 	}
-	installCongestionControl(session, endpoint.RemoteAddr)
+	installCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
 	stream, err := session.AcceptStream(ctx)
 	if err != nil {
 		_ = session.CloseWithError(0, "stream accept failed")
@@ -77,4 +80,21 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 		return nil, io.ErrUnexpectedEOF
 	}
 	return &conn{stream: stream, session: session, packet: endpoint.PacketConn, local: endpoint.LocalAddr, remote: endpoint.RemoteAddr}, nil
+}
+
+func congestionRemoteAddr(endpoint transports.Endpoint) net.Addr {
+	// ICEEndpoint keeps the public peer address in Endpoint.RemoteAddr, while
+	// Endpoint.Conn still exposes the selected candidate-pair address. BBR's
+	// MTU selection needs the latter, just like Xray uses quic.Conn.RemoteAddr.
+	if endpoint.Conn != nil {
+		if addr := endpoint.Conn.RemoteAddr(); addr != nil {
+			return addr
+		}
+	}
+	if addrConn, ok := endpoint.PacketConn.(interface{ RemoteAddr() net.Addr }); ok {
+		if addr := addrConn.RemoteAddr(); addr != nil {
+			return addr
+		}
+	}
+	return endpoint.RemoteAddr
 }

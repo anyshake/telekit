@@ -20,6 +20,26 @@ func WithMTU(mtu int) Option {
 	return func(t *Transport) { t.MTU = mtu }
 }
 
+func WithTTI(milliseconds int) Option {
+	return func(t *Transport) { t.TTI = milliseconds }
+}
+
+func WithUplinkCapacity(megabytesPerSecond uint32) Option {
+	return func(t *Transport) { t.UplinkCapacity = megabytesPerSecond }
+}
+
+func WithDownlinkCapacity(megabytesPerSecond uint32) Option {
+	return func(t *Transport) { t.DownlinkCapacity = megabytesPerSecond }
+}
+
+func WithCwndMultiplier(multiplier uint32) Option {
+	return func(t *Transport) { t.CwndMultiplier = multiplier }
+}
+
+func WithMaxSendingWindow(bytes int) Option {
+	return func(t *Transport) { t.MaxSendingWindow = bytes }
+}
+
 func WithParityShards(shards int) Option {
 	return func(t *Transport) { t.ParityShards = shards }
 }

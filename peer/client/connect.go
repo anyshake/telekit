@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/peer"
+	"github.com/anyshake/telekit/relays"
 	"github.com/anyshake/telekit/signaling"
 	"github.com/anyshake/telekit/transports"
+	"github.com/pion/ice/v4"
 	"github.com/samber/lo"
 )
 
@@ -111,8 +113,12 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 		if msg.Header.Type != peer.MessageTypeICEAnswer || msg.Payload == nil || msg.Payload.ICEUsername == "" || msg.Payload.ICEPassword == "" {
 			return
 		}
+		answer := transports.ICEDescription{UsernameFragment: msg.Payload.ICEUsername, Password: msg.Payload.ICEPassword, Candidates: append([]string(nil), msg.Payload.ICECandidates...)}
+		if c.options.OnICEAnswer != nil {
+			c.options.OnICEAnswer(c, answer)
+		}
 		select {
-		case answers <- transports.ICEDescription{UsernameFragment: msg.Payload.ICEUsername, Password: msg.Payload.ICEPassword, Candidates: append([]string(nil), msg.Payload.ICECandidates...)}:
+		case answers <- answer:
 		default:
 		}
 	})
@@ -124,16 +130,51 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 	if err := c.publishTransportSelect(); err != nil {
 		return err
 	}
-	agent, err := transports.NewICEAgent(c.api.ICEURLs)
+	relayProvider, err := c.api.WebSocketRelayProvider(c.clientId, c.serverId)
+	if err != nil {
+		return err
+	}
+	agentOptions := append([]ice.AgentOption(nil), c.options.ICEAgentOptions...)
+	agent, err := transports.NewICEAgent(c.api.ICEURLs, agentOptions...)
 	if err != nil {
 		return err
 	}
 	c.stateMu.Lock()
 	c.iceAgent = agent
 	c.stateMu.Unlock()
-	description, err := transports.GatherICE(agent)
+	description, err := transports.GatherICEWithCallback(agent, func(candidate ice.Candidate) {
+		if candidate == nil {
+			if c.options.OnICECandidateGatheringComplete != nil {
+				c.options.OnICECandidateGatheringComplete(c)
+			}
+			return
+		}
+		if c.options.OnICECandidate != nil {
+			c.options.OnICECandidate(c, candidate)
+		}
+	}, func() error {
+		if relayProvider == nil {
+			return nil
+		}
+		ufrag, _, err := agent.GetLocalUserCredentials()
+		if err != nil {
+			return err
+		}
+		candidate, packetConn, err := relayProvider.AllocateCandidate(ctx, ufrag)
+		if err != nil {
+			return err
+		}
+		if err := relays.AddLocalCandidate(agent, candidate, packetConn); err != nil {
+			_ = packetConn.Close()
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		return err
+	}
+	if c.options.OnICEOffer != nil {
+		c.options.OnICEOffer(c, description)
 	}
 	if err := c.publishICEOffer(description); err != nil {
 		return err
@@ -163,6 +204,9 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 	go c.monitorTransport(dataConn)
 	c.setIsConnected(true)
 	succeeded = true
+	if c.options.OnConnected != nil {
+		c.options.OnConnected(c)
+	}
 	return nil
 }
 

@@ -23,6 +23,8 @@ const (
 )
 
 type Options struct {
+	// ICEAgentOptions are passed to the Pion ICE agent created for each connection.
+	ICEAgentOptions []ice.AgentOption
 	// TimeFunc returns the current time used to generate handshake timestamps.
 	TimeFunc func() time.Time
 	// Timeout is the maximum time to wait for a connection to be established.
@@ -48,6 +50,17 @@ type Options struct {
 	OnClientHello func(*Client)
 	// OnServerHello is called after a valid ServerHello is received.
 	OnServerHello func(*Client)
+	// OnICECandidate is called for each locally gathered ICE candidate.
+	OnICECandidate func(*Client, ice.Candidate)
+	// OnICECandidateGatheringComplete is called after local ICE candidate
+	// gathering has completed.
+	OnICECandidateGatheringComplete func(*Client)
+	// OnICEOffer is called before the local ICE offer is published.
+	OnICEOffer func(*Client, transports.ICEDescription)
+	// OnICEAnswer is called after a valid ICE answer is received.
+	OnICEAnswer func(*Client, transports.ICEDescription)
+	// OnConnected is called after ICE and the selected transport are connected.
+	OnConnected func(*Client)
 	// OnConnectionFailed is called when connection establishment fails.
 	OnConnectionFailed func(*Client, error)
 	// OnDisconnected is called after an established connection is lost.

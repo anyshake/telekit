@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const demoServerIdentitySeed = "TDkNs3EMNecsKy+t435mMxT9gf232n3t3KnmSOazwXo="
+const demoServerIdentitySeed = "4c390db3710c35e72c2b2fade37e663314fd81fdb7da7deddca9e648e6b3c17a"
 
 type arguments struct {
 	mqttBroker           string
@@ -32,7 +32,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.baseTopic, "mqtt-base-topic", "telekit-base-topic", "MQTT base topic")
 	flag.StringVar(&args.roomId, "room", "example-netconn", "room ID")
 	flag.StringVar(&args.preSharedKey, "secret", "change@me", "pre-shared passphrase accepted for demo clients")
-	flag.StringVar(&args.identitySeed, "identity-seed", demoServerIdentitySeed, "Ed25519 server identity seed (base64)")
+	flag.StringVar(&args.identitySeed, "identity-seed", demoServerIdentitySeed, "Ed25519 server identity seed (hex)")
 	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data per connection")

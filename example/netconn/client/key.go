@@ -2,12 +2,13 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 func decodeServerPublicKey(pubKey string) (ed25519.PublicKey, error) {
-	key, err := base64.StdEncoding.DecodeString(pubKey)
+	key, err := hex.DecodeString(strings.TrimSpace(pubKey))
 	if err != nil {
 		return nil, fmt.Errorf("decode server public key: %w", err)
 	}

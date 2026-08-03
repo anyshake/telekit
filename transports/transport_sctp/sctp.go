@@ -82,17 +82,25 @@ func createAssociation(ctx context.Context, conn net.Conn, t Transport, client b
 		if mtu == 0 {
 			mtu = DefaultMTU
 		}
+		maxReceiveBuffer := t.MaxReceiveBuffer
+		if maxReceiveBuffer == 0 {
+			maxReceiveBuffer = DefaultMaxReceiveBuffer
+		}
+		maxMessageSize := t.MaxMessageSize
+		if maxMessageSize == 0 {
+			maxMessageSize = DefaultMaxMessageSize
+		}
 		rtoMax := t.RTOMax
 		if rtoMax == 0 {
-			rtoMax = DefaultRTOMax
+			rtoMax = float64(DefaultRTOMax)
 		}
 		minCwnd := t.MinCwnd
 		if minCwnd == 0 {
-			minCwnd = mtu * 4
+			minCwnd = mtu * 8
 		}
 		fastRtxWnd := t.FastRtxWnd
 		if fastRtxWnd == 0 {
-			fastRtxWnd = mtu * 4
+			fastRtxWnd = mtu * 8
 		}
 		cwndCAStep := t.CwndCAStep
 		if cwndCAStep == 0 {
@@ -103,19 +111,13 @@ func createAssociation(ctx context.Context, conn net.Conn, t Transport, client b
 			sctp.WithName("telekit-sctp"),
 			sctp.WithBlockWrite(t.BlockWrite),
 			sctp.WithEnableInterleaving(t.EnableInterleaving),
+			sctp.WithMTU(mtu),
 			sctp.WithRTOMax(rtoMax),
 			sctp.WithMinCwnd(minCwnd),
 			sctp.WithFastRtxWnd(fastRtxWnd),
 			sctp.WithCwndCAStep(cwndCAStep),
-		}
-		if t.MTU != 0 {
-			opts = append(opts, sctp.WithMTU(t.MTU))
-		}
-		if t.MaxReceiveBuffer != 0 {
-			opts = append(opts, sctp.WithMaxReceiveBufferSize(t.MaxReceiveBuffer))
-		}
-		if t.MaxMessageSize != 0 {
-			opts = append(opts, sctp.WithMaxMessageSize(t.MaxMessageSize))
+			sctp.WithMaxReceiveBufferSize(maxReceiveBuffer),
+			sctp.WithMaxMessageSize(maxMessageSize),
 		}
 		var association *sctp.Association
 		var err error

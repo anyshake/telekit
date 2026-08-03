@@ -20,17 +20,32 @@ var sessionPreface = []byte("telekit-kcp-v1\x00")
 var closeMarker = make([]byte, 8)
 
 // Transport uses KCP's stream mode over the packet-preserving ICE connection.
-// The defaults use light FEC to prevent recoverable loss from repeatedly
-// collapsing KCP's congestion window on weak ICE paths.
+// Its default timing and capacity values use a loss-tolerant Xray mKCP
+// profile; FEC remains available as an explicit kcp-go option.
 type Transport struct {
-	MTU          int
+	// MTU is the KCP payload MTU, excluding the IP and UDP headers.
+	MTU int
+	// TTI is the KCP update interval in milliseconds.
+	TTI int
+	// UplinkCapacity and DownlinkCapacity are the estimated capacities in
+	// MiB/s, matching Xray mKCP's configuration model.
+	UplinkCapacity   uint32
+	DownlinkCapacity uint32
+	// CwndMultiplier scales the Xray-style control window before it is bounded
+	// by MaxSendingWindow.
+	CwndMultiplier uint32
+	// MaxSendingWindow is the maximum queued sending window in bytes.
+	MaxSendingWindow int
+
+	// DataShards and ParityShards retain optional kcp-go FEC support. The
+	// defaults use light FEC because ICE paths can lose bursts of packets.
 	DataShards   int
 	ParityShards int
-	// AdaptiveCongestionControl falls back to KCP's no-cwnd mode only after
-	// sustained loss, then probes congestion control again after recovery.
+	// AdaptiveCongestionControl applies the Xray-style control-window response
+	// to sustained retransmission/RTO growth. It works with either congestion
+	// control mode.
 	AdaptiveCongestionControl bool
-	// DisableCongestionControl forces KCP's no-cwnd mode for bulk-throughput
-	// links where another layer already controls the sending rate.
+	// DisableCongestionControl forces kcp-go's no-cwnd mode.
 	DisableCongestionControl bool
 }
 
@@ -44,14 +59,21 @@ func (t Transport) Dial(_ context.Context, endpoint transports.Endpoint) (net.Co
 	if err != nil {
 		return nil, err
 	}
-	configure(session, t.MTU, !t.DisableCongestionControl)
+	settings := xrayKCPSettings(t)
+	configure(session, settings, !t.DisableCongestionControl, t.AdaptiveCongestionControl)
 	if _, err := session.Write(sessionPreface); err != nil {
 		_ = session.Close()
 		return nil, err
 	}
-	c := &conn{session: session, packet: endpoint.PacketConn, local: endpoint.LocalAddr, remote: endpoint.RemoteAddr}
-	if t.AdaptiveCongestionControl && !t.DisableCongestionControl {
-		c.startAdaptiveCongestionControl()
+	c := &conn{
+		session:        session,
+		packet:         endpoint.PacketConn,
+		local:          endpoint.LocalAddr,
+		remote:         endpoint.RemoteAddr,
+		writeChunkSize: settings.mtu - 24,
+	}
+	if t.AdaptiveCongestionControl {
+		c.startAdaptiveCongestionControl(settings)
 	}
 	return c, nil
 }
@@ -76,7 +98,8 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 	}()
 	select {
 	case session := <-accepted:
-		configure(session, t.MTU, !t.DisableCongestionControl)
+		settings := xrayKCPSettings(t)
+		configure(session, settings, !t.DisableCongestionControl, t.AdaptiveCongestionControl)
 		preface := make([]byte, len(sessionPreface))
 		if _, err := io.ReadFull(session, preface); err != nil {
 			_ = session.Close()
@@ -88,9 +111,16 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 			_ = listener.Close()
 			return nil, errors.New("invalid KCP session preface")
 		}
-		c := &conn{session: session, listener: listener, packet: endpoint.PacketConn, local: endpoint.LocalAddr, remote: endpoint.RemoteAddr}
-		if t.AdaptiveCongestionControl && !t.DisableCongestionControl {
-			c.startAdaptiveCongestionControl()
+		c := &conn{
+			session:        session,
+			listener:       listener,
+			packet:         endpoint.PacketConn,
+			local:          endpoint.LocalAddr,
+			remote:         endpoint.RemoteAddr,
+			writeChunkSize: settings.mtu - 24,
+		}
+		if t.AdaptiveCongestionControl {
+			c.startAdaptiveCongestionControl(settings)
 		}
 		return c, nil
 	case err := <-errs:
@@ -103,72 +133,98 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 	}
 }
 
-func configure(session *kcp.UDPSession, mtu int, congestionControl bool) {
-	// Keep packets below the ICE path's conservative MTU. With congestion
-	// control enabled, avoiding avoidable fragmentation is more important than
-	// using kcp-go's larger default packet size.
-	if mtu == 0 {
-		mtu = DefaultMTU
+func configure(session *kcp.UDPSession, settings kcpSettings, congestionControl, adaptive bool) {
+	_ = session.SetMtu(settings.mtu)
+	// Xray mKCP uses nodelay, a configurable TTI, and fast resend after two
+	// duplicate acknowledgements. The default profile disables kcp-go's native
+	// Reno window and uses the delivery-rate controller as the sole controller.
+	setCongestionControl(session, settings.tti, congestionControl)
+	sendWindow := settings.sendWindow
+	if adaptive {
+		sendWindow = settings.initialSendWindow
 	}
-	_ = session.SetMtu(mtu)
-	// Fast mode: 10 ms interval and aggressive retransmission. nc=0 enables
-	// kcp-go's native congestion control; adaptive mode may temporarily change
-	// this after sustained loss (see monitorCongestion).
-	setCongestionControl(session, congestionControl)
-	session.SetWindowSize(1024, 1024)
+	session.SetWindowSize(sendWindow, settings.receiveWindow)
 	session.SetACKNoDelay(true)
-	// Coalesce application writes until the next KCP update. This smooths
-	// bursts produced by encrypted net.Conn frames without disabling cwnd.
-	session.SetWriteDelay(true)
+	// Flush writes immediately. The ICE path is already selected and KCP's
+	// send window provides batching/backpressure; waiting for the next TTI
+	// adds up to 50ms per application write and severely limits throughput.
+	session.SetWriteDelay(false)
 }
 
-func setCongestionControl(session *kcp.UDPSession, enabled bool) {
+func setCongestionControl(session *kcp.UDPSession, interval int, enabled bool) {
 	nc := 1
 	if enabled {
 		nc = 0
 	}
-	session.SetNoDelay(1, 10, 2, nc)
+	session.SetNoDelay(1, interval, 2, nc)
 }
 
-func (c *conn) startAdaptiveCongestionControl() {
+func (c *conn) startAdaptiveCongestionControl(settings kcpSettings) {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	c.adaptiveStop = stop
 	c.adaptiveDone = done
-	go monitorCongestion(c.session, stop, done)
+	c.controller = &deliveryRateController{}
+	go monitorCongestion(c.session, stop, done, settings, c.controller)
 }
 
-func monitorCongestion(session *kcp.UDPSession, stop <-chan struct{}, done chan<- struct{}) {
+func monitorCongestion(session *kcp.UDPSession, stop <-chan struct{}, done chan<- struct{}, settings kcpSettings, controller *deliveryRateController) {
 	defer close(done)
 	ticker := time.NewTicker(adaptiveCheckInterval)
 	defer ticker.Stop()
 
-	congestionEnabled := true
 	var degradedSince time.Time
-	var disabledAt time.Time
+	window := settings.initialSendWindow
 	for {
 		select {
 		case <-ticker.C:
 			now := time.Now()
 			rto := session.GetRTO()
-			if congestionEnabled {
-				if rto >= adaptiveFallbackRTO {
-					if degradedSince.IsZero() {
-						degradedSince = now
-					}
-					if now.Sub(degradedSince) >= adaptiveFallbackAfter {
-						setCongestionControl(session, false)
-						congestionEnabled = false
-						disabledAt = now
-						degradedSince = time.Time{}
-					}
-				} else {
-					degradedSince = time.Time{}
+			rate := controller.sample(now)
+			if rto >= adaptiveFallbackRTO {
+				if degradedSince.IsZero() {
+					degradedSince = now
 				}
-			} else if now.Sub(disabledAt) >= adaptiveRecoveryAfter && rto <= adaptiveRecoveryRTO {
-				setCongestionControl(session, true)
-				congestionEnabled = true
-				disabledAt = time.Time{}
+				if now.Sub(degradedSince) >= adaptiveFallbackAfter {
+					nextWindow := window * 3 / 4
+					if nextWindow < minControlWindow {
+						nextWindow = minControlWindow
+					}
+					if nextWindow > settings.sendWindow {
+						nextWindow = settings.sendWindow
+					}
+					if nextWindow < window {
+						window = nextWindow
+						session.SetWindowSize(window, settings.receiveWindow)
+					}
+					degradedSince = now
+				}
+				continue
+			}
+
+			degradedSince = time.Time{}
+
+			if rate == 0 || window >= settings.sendWindow {
+				continue
+			}
+			srtt := session.GetSRTT()
+			if srtt <= 0 {
+				srtt = int32(settings.tti)
+			}
+			target := bbrTargetWindow(rate, srtt, settings.mtu, settings.sendWindow)
+			if target > window {
+				step := window / 2
+				if step < 1 {
+					step = 1
+				}
+				window += step
+				if window > target {
+					window = target
+				}
+				if window > settings.sendWindow {
+					window = settings.sendWindow
+				}
+				session.SetWindowSize(window, settings.receiveWindow)
 			}
 		case <-stop:
 			return
@@ -177,23 +233,45 @@ func monitorCongestion(session *kcp.UDPSession, stop <-chan struct{}, done chan<
 }
 
 type conn struct {
-	session      *kcp.UDPSession
-	listener     *kcp.Listener
-	packet       net.PacketConn
-	local        net.Addr
-	remote       net.Addr
-	writeMu      sync.Mutex
-	adaptiveStop chan struct{}
-	adaptiveDone chan struct{}
-	closeOnce    sync.Once
-	closeErr     error
+	session        *kcp.UDPSession
+	listener       *kcp.Listener
+	packet         net.PacketConn
+	local          net.Addr
+	remote         net.Addr
+	writeMu        sync.Mutex
+	controller     *deliveryRateController
+	writeChunkSize int
+	adaptiveStop   chan struct{}
+	adaptiveDone   chan struct{}
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func (c *conn) Read(p []byte) (int, error) { return c.session.Read(p) }
 func (c *conn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.session.Write(p)
+	chunkSize := c.writeChunkSize
+	if chunkSize <= 0 {
+		chunkSize = len(p)
+	}
+	total := 0
+	for len(p) > 0 {
+		chunk := p
+		if len(chunk) > chunkSize {
+			chunk = chunk[:chunkSize]
+		}
+		n, err := c.session.Write(chunk)
+		total += n
+		if c.controller != nil {
+			c.controller.record(n)
+		}
+		if err != nil || n == 0 {
+			return total, err
+		}
+		p = p[n:]
+	}
+	return total, nil
 }
 func (c *conn) LocalAddr() net.Addr                { return c.local }
 func (c *conn) RemoteAddr() net.Addr               { return c.remote }

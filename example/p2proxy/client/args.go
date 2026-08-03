@@ -33,7 +33,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.secret, "secret", "change-me", "pre-shared passphrase")
 	flag.StringVar(&args.serverPublicKey, "server-public-key", common.DefaultServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "telekit connection timeout")
-	flag.StringVar(&args.transportName, "transport", "quic", "transport selected after ICE (quic, kcp, sctp, or raknet)")
+	flag.StringVar(&args.transportName, "transport", "quic", "transport selected after ICE (quic, kcp, or sctp)")
 	flag.IntVar(&args.poolSize, "pool-size", 2, "number of telekit sessions used for SOCKS requests")
 	flag.StringVar(&args.socksAddr, "socks", "127.0.0.1:1080", "local SOCKS5 listen address")
 	flag.IntVar(&args.queueMessages, "mqtt-queue-messages", 1024, "maximum queued MQTT signaling messages")

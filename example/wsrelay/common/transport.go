@@ -1,4 +1,4 @@
-package main
+package common
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	transportsctp "github.com/anyshake/telekit/transports/transport_sctp"
 )
 
-func createTransport(name string) (transports.ITransport, error) {
+func CreateTransport(name string) (transports.ITransport, error) {
 	switch name {
 	case "quic":
 		return transportquic.New(), nil
@@ -22,5 +22,14 @@ func createTransport(name string) (transports.ITransport, error) {
 		return transportrawudp.New(), nil
 	default:
 		return nil, fmt.Errorf("unsupported transport %q", name)
+	}
+}
+
+func ServerTransports() []transports.ITransport {
+	return []transports.ITransport{
+		transportquic.New(),
+		transportkcp.New(),
+		transportsctp.New(),
+		transportrawudp.New(),
 	}
 }

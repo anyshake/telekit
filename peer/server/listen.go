@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/peer"
+	"github.com/anyshake/telekit/relays"
 	"github.com/anyshake/telekit/signaling"
 	transportcore "github.com/anyshake/telekit/transports"
+	"github.com/pion/ice/v4"
 )
 
 var roomOwners sync.Map
@@ -113,6 +115,9 @@ func (s *Server) Listen() error {
 				Password:         msg.Payload.ICEPassword,
 				Candidates:       append([]string(nil), msg.Payload.ICECandidates...),
 			}
+			if s.options.OnICEOffer != nil {
+				s.options.OnICEOffer(conn, offer)
+			}
 			conn.stateMu.Lock()
 			selected := conn.selectedTransport != ""
 			if !selected {
@@ -138,12 +143,47 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 	if selectedName == "" {
 		return
 	}
-	agent, err := transportcore.NewICEAgent(s.api.ICEURLs)
+	relayProvider, err := s.api.WebSocketRelayProvider(s.serverId, conn.sourceId)
 	if err != nil {
 		_ = conn.Close()
 		return
 	}
-	description, err := transportcore.GatherICE(agent)
+	agentOptions := append([]ice.AgentOption(nil), s.options.ICEAgentOptions...)
+	agent, err := transportcore.NewICEAgent(s.api.ICEURLs, agentOptions...)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	description, err := transportcore.GatherICEWithCallback(agent, func(candidate ice.Candidate) {
+		if candidate == nil {
+			if s.options.OnICECandidateGatheringComplete != nil {
+				s.options.OnICECandidateGatheringComplete(conn)
+			}
+			return
+		}
+		if s.options.OnICECandidate != nil {
+			s.options.OnICECandidate(conn, candidate)
+		}
+	}, func() error {
+		if relayProvider == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), s.options.HandshakeTimeout)
+		defer cancel()
+		ufrag, _, err := agent.GetLocalUserCredentials()
+		if err != nil {
+			return err
+		}
+		candidate, packetConn, err := relayProvider.AllocateCandidate(ctx, ufrag)
+		if err != nil {
+			return err
+		}
+		if err := relays.AddLocalCandidate(agent, candidate, packetConn); err != nil {
+			_ = packetConn.Close()
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		_ = agent.Close()
 		_ = conn.Close()
@@ -152,6 +192,9 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 	conn.stateMu.Lock()
 	conn.iceAgent = agent
 	conn.stateMu.Unlock()
+	if s.options.OnICEAnswer != nil {
+		s.options.OnICEAnswer(conn, description)
+	}
 	if err := s.sendICEAnswer(conn, description); err != nil {
 		_ = conn.Close()
 		return
@@ -185,6 +228,9 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 	go monitorTransport(conn)
 	select {
 	case s.acceptCh <- conn:
+		if s.options.OnConnected != nil {
+			s.options.OnConnected(conn)
+		}
 	case <-s.closeCh:
 		_ = conn.Close()
 	default:
