@@ -161,6 +161,7 @@ func handleSession(
 			go handleRunningSessionRequests(
 				requests,
 				command,
+				ptyFile,
 			)
 
 			<-done
@@ -184,9 +185,30 @@ func handleSession(
 func handleRunningSessionRequests(
 	requests <-chan *ssh.Request,
 	command *exec.Cmd,
+	ptyFile *os.File,
 ) {
 	for request := range requests {
 		switch request.Type {
+		case "window-change":
+			width, height, err := parseWinch(request.Payload)
+			if err != nil {
+				_ = request.Reply(false, nil)
+				continue
+			}
+
+			if err := pty.Setsize(
+				ptyFile,
+				&pty.Winsize{
+					Cols: uint16(width),
+					Rows: uint16(height),
+				},
+			); err != nil {
+				_ = request.Reply(false, nil)
+				continue
+			}
+
+			_ = request.Reply(true, nil)
+
 		case "signal":
 			signal, err := parseSignal(request.Payload)
 			if err != nil {
