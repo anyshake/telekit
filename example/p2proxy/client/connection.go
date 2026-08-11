@@ -45,17 +45,17 @@ func connectTelekit(args *arguments) (signaling.Adapter, *protocol.Pool, error) 
 		return nil, nil, err
 	}
 	key := sha256.Sum256([]byte(args.secret))
+	// peer/client owns transport failure recovery. Keep each Session attached to
+	// the same Client so an internal ICE reconnect cannot race an external one.
 	slots := make([]*protocol.SessionSlot, 0, args.poolSize)
-	lost := make([]chan struct{}, 0, args.poolSize)
 	for index := 0; index < args.poolSize; index++ {
 		clientID := args.clientID
 		if args.poolSize > 1 {
 			clientID = fmt.Sprintf("%s-%d", args.clientID, index)
 		}
 		log.Printf("peer[%d/%d]: connecting client-id=%q transport=%q", index+1, args.poolSize, clientID, transport.Name())
-		lostCh := make(chan struct{}, 1)
 		connectCtx, cancel := context.WithTimeout(context.Background(), args.timeout)
-		client, err := newPeerClient(connectCtx, api, key[:], serverPublicKey, clientID, transport, args.timeout, lostCh)
+		client, err := newPeerClient(connectCtx, api, key[:], serverPublicKey, clientID, transport, args.timeout)
 		cancel()
 		if err != nil {
 			for _, slot := range slots {
@@ -67,22 +67,12 @@ func connectTelekit(args *arguments) (signaling.Adapter, *protocol.Pool, error) 
 		slot := protocol.NewSessionSlot()
 		slot.Replace(protocol.NewSession(client))
 		slots = append(slots, slot)
-		lost = append(lost, lostCh)
 	}
 	pool := protocol.NewPoolSlots(slots...)
-	for index, slot := range slots {
-		clientID := args.clientID
-		if args.poolSize > 1 {
-			clientID = fmt.Sprintf("%s-%d", args.clientID, index)
-		}
-		go superviseSession(pool, slot, lost[index], func(ctx context.Context) (*peerclient.Client, error) {
-			return newPeerClient(ctx, api, key[:], serverPublicKey, clientID, transport, args.timeout, lost[index])
-		}, args.timeout)
-	}
 	return adapter, pool, nil
 }
 
-func newPeerClient(ctx context.Context, api *peerapi.API, key []byte, serverPublicKey ed25519.PublicKey, clientID string, transport transports.ITransport, timeout time.Duration, lost chan<- struct{}) (*peerclient.Client, error) {
+func newPeerClient(ctx context.Context, api *peerapi.API, key []byte, serverPublicKey ed25519.PublicKey, clientID string, transport transports.ITransport, timeout time.Duration) (*peerclient.Client, error) {
 	var phase atomic.Value
 	phase.Store("signaling handshake")
 	conn, err := peerclient.NewClient(peer.PreSharedKey{
@@ -117,10 +107,6 @@ func newPeerClient(ctx context.Context, api *peerapi.API, key []byte, serverPubl
 		},
 		OnDisconnected: func(*peerclient.Client) {
 			log.Printf("peer: transport disconnected client-id=%q", clientID)
-			select {
-			case lost <- struct{}{}:
-			default:
-			}
 		},
 		OnICECandidate: func(_ *peerclient.Client, cd ice.Candidate) {
 			log.Printf("exchange candidate: %v", cd.Address())
@@ -138,39 +124,6 @@ func newPeerClient(ctx context.Context, api *peerapi.API, key []byte, serverPubl
 		return nil, fmt.Errorf("peer connection failed for client-id %q during %s: %w", clientID, phase.Load().(string), err)
 	}
 	return conn, nil
-}
-
-func superviseSession(pool *protocol.Pool, slot *protocol.SessionSlot, lost <-chan struct{}, dial func(context.Context) (*peerclient.Client, error), timeout time.Duration) {
-	for {
-		select {
-		case <-pool.Done():
-			return
-		case <-lost:
-		}
-		slot.Replace(nil)
-		for {
-			select {
-			case <-pool.Done():
-				return
-			default:
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			conn, err := dial(ctx)
-			cancel()
-			if err == nil {
-				slot.Replace(protocol.NewSession(conn))
-				break
-			}
-			log.Printf("pool session reconnect failed: %v", err)
-			timer := time.NewTimer(time.Second)
-			select {
-			case <-timer.C:
-			case <-pool.Done():
-				timer.Stop()
-				return
-			}
-		}
-	}
 }
 
 func decodePublicKey(value string) (ed25519.PublicKey, error) {

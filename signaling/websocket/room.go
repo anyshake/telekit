@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/anyshake/telekit/signaling"
 	"github.com/anyshake/telekit/signaling/websocket/broker"
@@ -43,7 +44,7 @@ func (a *Adapter) ensureRoom(roomID string) (*roomConn, error) {
 		_ = conn.Close()
 		return room, nil
 	}
-	conn.SetReadLimit(broker.MaxMessageSize)
+	configureConn(conn)
 	room := &roomConn{
 		conn:     conn,
 		done:     make(chan struct{}),
@@ -56,6 +57,14 @@ func (a *Adapter) ensureRoom(roomID string) (*roomConn, error) {
 		a.onConnect()
 	}
 	return room, nil
+}
+
+func configureConn(conn *gorilla.Conn) {
+	conn.SetReadLimit(broker.MaxMessageSize)
+	_ = conn.SetReadDeadline(time.Now().Add(websocketPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(websocketPongWait))
+	})
 }
 
 func (a *Adapter) dialRoom(roomID string) (*gorilla.Conn, error) {

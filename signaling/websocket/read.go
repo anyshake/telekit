@@ -5,54 +5,88 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/signaling"
-	"github.com/anyshake/telekit/signaling/websocket/broker"
 	gorilla "github.com/gorilla/websocket"
 )
 
 func (a *Adapter) readLoop(roomID string, room *roomConn, conn *gorilla.Conn) {
 	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			if a.onConnectionLost != nil {
-				a.onConnectionLost(err)
+		pingDone := make(chan struct{})
+		go pingLoop(room, conn, pingDone)
+		var readErr error
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				readErr = err
+				close(pingDone)
+				break
 			}
-			if a.onReconnecting != nil {
-				a.onReconnecting()
+			var p packet
+			if json.Unmarshal(data, &p) != nil {
+				continue
 			}
-			_ = conn.Close()
-			room.writeMu.Lock()
-			if room.conn == conn {
-				room.conn = nil
+			room.handlerM.RLock()
+			handlers := make([]signaling.Handler, 0, len(room.handlers[p.Type]))
+			for _, handler := range room.handlers[p.Type] {
+				handlers = append(handlers, handler)
 			}
-			room.writeMu.Unlock()
+			room.handlerM.RUnlock()
+			for _, handler := range handlers {
+				handler(append([]byte(nil), p.Payload...))
+			}
+		}
 
-			newConn, ok := a.reconnectRoom(roomID, room)
-			if !ok {
-				a.removeRoom(roomID, room)
-				return
-			}
-			conn = newConn
-			if a.onConnect != nil {
-				a.onConnect()
-			}
-			continue
+		if !a.roomActive(roomID, room) {
+			return
 		}
-		var p packet
-		if json.Unmarshal(data, &p) != nil {
-			continue
+		if a.onConnectionLost != nil {
+			a.onConnectionLost(readErr)
 		}
-		room.handlerM.RLock()
-		handlers := make([]signaling.Handler, 0, len(room.handlers[p.Type]))
-		for _, handler := range room.handlers[p.Type] {
-			handlers = append(handlers, handler)
+		if a.onReconnecting != nil {
+			a.onReconnecting()
 		}
-		room.handlerM.RUnlock()
-		for _, handler := range handlers {
-			handler(append([]byte(nil), p.Payload...))
+		_ = conn.Close()
+		room.writeMu.Lock()
+		if room.conn == conn {
+			room.conn = nil
+		}
+		room.writeMu.Unlock()
+
+		newConn, ok := a.reconnectRoom(roomID, room)
+		if !ok {
+			a.removeRoom(roomID, room)
+			return
+		}
+		conn = newConn
+		if a.onConnect != nil {
+			a.onConnect()
 		}
 	}
 }
 
+func pingLoop(room *roomConn, conn *gorilla.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(websocketPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			room.writeMu.Lock()
+			if room.conn != conn {
+				room.writeMu.Unlock()
+				return
+			}
+			err := conn.WriteControl(gorilla.PingMessage, nil, time.Now().Add(websocketWriteTimeout))
+			room.writeMu.Unlock()
+			if err != nil {
+				_ = conn.Close()
+				return
+			}
+		case <-done:
+			return
+		case <-room.done:
+			return
+		}
+	}
+}
 func (a *Adapter) reconnectRoom(roomID string, room *roomConn) (*gorilla.Conn, bool) {
 	delay := a.reconnectMin
 	maxDelay := a.reconnectMax
@@ -71,7 +105,7 @@ func (a *Adapter) reconnectRoom(roomID string, room *roomConn) (*gorilla.Conn, b
 		if err == nil {
 			conn, response, dialErr := a.dialer.Dial(endpoint, a.headers.Clone())
 			if dialErr == nil {
-				conn.SetReadLimit(broker.MaxMessageSize)
+				configureConn(conn)
 				if !a.roomActive(roomID, room) {
 					_ = conn.Close()
 					return nil, false

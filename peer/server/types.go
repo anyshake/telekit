@@ -159,6 +159,7 @@ type Server struct {
 	onHandshake signaling.Subscription
 
 	connections       *haxmap.Map[string, *Connection]
+	helloMu           sync.Mutex
 	acceptCh          chan *Connection
 	closeCh           chan struct{}
 	closeOnce         sync.Once

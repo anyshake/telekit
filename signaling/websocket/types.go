@@ -44,6 +44,9 @@ type Adapter struct {
 const (
 	websocketReconnectMin = 250 * time.Millisecond
 	websocketReconnectMax = 30 * time.Second
+	websocketPongWait     = 15 * time.Second
+	websocketPingInterval = 5 * time.Second
+	websocketWriteTimeout = 5 * time.Second
 )
 
 type Option func(*Adapter)

@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/anyshake/telekit/signaling"
 	gorilla "github.com/gorilla/websocket"
@@ -48,7 +49,10 @@ func (a *Adapter) Publish(roomID string, typ signaling.MessageType, payload []by
 	if room.conn == nil {
 		return signaling.ErrClosed
 	}
-	if err := room.conn.WriteMessage(gorilla.TextMessage, data); err != nil {
+	_ = room.conn.SetWriteDeadline(time.Now().Add(websocketWriteTimeout))
+	err = room.conn.WriteMessage(gorilla.TextMessage, data)
+	_ = room.conn.SetWriteDeadline(time.Time{})
+	if err != nil {
 		_ = room.conn.Close()
 		return err
 	}

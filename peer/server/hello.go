@@ -167,33 +167,32 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 	return nil, nil
 }
 
-func (s *Server) sendServerHello(codec *peer.Codec, sourceId string, sessionSalt []byte) error {
-	conn, ok := s.connections.Get(sourceId)
-	if !ok {
-		return errors.New("client session is not installed")
+func (s *Server) sendServerHello(conn *Connection) error {
+	if conn == nil {
+		return errors.New("client session is nil")
 	}
 	signature, err := peer.SignServerHello(
 		s.options.IdentityKey,
 		s.api.RoomId,
-		sourceId,
+		conn.sourceId,
 		s.serverId,
 		conn.clientNonce,
 		conn.serverNonce,
 		conn.clientEphemeralKey,
 		conn.serverEphemeralKey,
-		sessionSalt,
+		conn.sessionSalt,
 	)
 	if err != nil {
 		return err
 	}
-	dataBytes, err := codec.EncodeMessage(&peer.Message{
+	dataBytes, err := conn.handshakeCodec.EncodeMessage(&peer.Message{
 		Header: &peer.Header{
 			Type:     peer.MessageTypeServerHello,
 			SourceId: s.serverId,
-			TargetId: sourceId,
+			TargetId: conn.sourceId,
 		},
 		Payload: &peer.Payload{
-			SessionSalt:        sessionSalt,
+			SessionSalt:        conn.sessionSalt,
 			ClientNonce:        conn.clientNonce,
 			ServerNonce:        conn.serverNonce,
 			ClientEphemeralKey: conn.clientEphemeralKey,

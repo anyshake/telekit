@@ -100,15 +100,25 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	}
 
 	var handshake *serverHandshake
-	select {
-	case handshake = <-handshakeCh:
-		c.codec = handshake.codec
-		c.serverId = handshake.serverID
-		if c.options.OnServerHello != nil {
-			c.options.OnServerHello(c)
+	helloRetry := time.NewTicker(time.Second)
+	defer helloRetry.Stop()
+	for handshake == nil {
+		select {
+		case handshake = <-handshakeCh:
+			c.codec = handshake.codec
+			c.serverId = handshake.serverID
+			if c.options.OnServerHello != nil {
+				c.options.OnServerHello(c)
+			}
+		case <-helloRetry.C:
+			// A network switch can leave the signaling transport half-open:
+			// Publish may succeed locally while the server never receives the
+			// packet. Re-send the same authenticated hello until ServerHello
+			// arrives. The server treats the same nonce as an idempotent retry.
+			_ = c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageHello, attempt.message)
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 	if !lo.Contains(handshake.transports, c.options.Transport.Name()) {
 		return errors.New("requested transport is not supported by server")

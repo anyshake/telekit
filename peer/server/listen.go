@@ -52,6 +52,8 @@ func (s *Server) Listen() error {
 
 	var err error
 	s.onHandshake, err = s.api.SignalingServer.Subscribe(s.api.RoomId, signaling.MessageHello, func(data []byte) {
+		s.helloMu.Lock()
+		defer s.helloMu.Unlock()
 		if !s.helloLimiter.Allow() {
 			return
 		}
@@ -61,7 +63,7 @@ func (s *Server) Listen() error {
 		}
 		s.connections.Set(conn.sourceId, conn)
 		conn.startHandshakeTimer(s.options.HandshakeTimeout)
-		if err := s.sendServerHello(conn.handshakeCodec, conn.sourceId, conn.sessionSalt); err != nil {
+		if err := s.sendServerHello(conn); err != nil {
 			s.connections.Del(conn.sourceId)
 			_ = conn.Close()
 		}
