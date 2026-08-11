@@ -1,6 +1,8 @@
 package websocket
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,7 +65,7 @@ func (a *Adapter) dialRoom(roomID string) (*gorilla.Conn, error) {
 	}
 	conn, response, err := a.dialer.Dial(endpoint, a.headers.Clone())
 	if err != nil {
-		closeHandshakeResponse(response)
+		return nil, wrapHandshakeError(response, err)
 	}
 	return conn, err
 }
@@ -88,6 +90,18 @@ func closeHandshakeResponse(response *http.Response) {
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
+}
+
+func wrapHandshakeError(response *http.Response, err error) error {
+	if response == nil || response.Body == nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if readErr != nil || len(body) == 0 {
+		return fmt.Errorf("%w: HTTP %s", err, response.Status)
+	}
+	return fmt.Errorf("%w: HTTP %s: %s", err, response.Status, strings.TrimSpace(string(body)))
 }
 
 func (a *Adapter) removeRoom(roomID string, room *roomConn) {

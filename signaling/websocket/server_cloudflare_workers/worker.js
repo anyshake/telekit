@@ -15,13 +15,17 @@ export default {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
-    const policy = authorize(request, roomID, env);
+    const policy = authorize(request, url, roomID, env);
     if (!policy.accepted) {
       return new Response(policy.reason, { status: policy.status });
     }
 
     const namespace = env.SIGNALING_ROOM;
-    if (namespace === undefined) {
+    if (
+      namespace === undefined ||
+      typeof namespace.idFromName !== "function" ||
+      typeof namespace.get !== "function"
+    ) {
       return new Response("SIGNALING_ROOM Durable Object binding is missing", {
         status: 500,
       });
@@ -33,13 +37,13 @@ export default {
   },
 };
 
-function authorize(request, roomID, env) {
+function authorize(request, url, roomID, env) {
   if (validateRoomID(roomID) !== undefined) {
     return { accepted: false, status: 400, reason: "Invalid room ID" };
   }
 
   const token = env.SIGNALING_TOKEN ?? SIGNALING_TOKEN;
-  if (request.url.searchParams.get("token") !== token) {
+  if (url.searchParams.get("token") !== token) {
     return { accepted: false, status: 403, reason: "WebSocket room access denied" };
   }
 
