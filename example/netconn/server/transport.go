@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/anyshake/telekit/transports"
+	transporthttp3 "github.com/anyshake/telekit/transports/transport_http3"
 	transportkcp "github.com/anyshake/telekit/transports/transport_kcp"
 	transportquic "github.com/anyshake/telekit/transports/transport_quic"
 	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
@@ -11,6 +12,7 @@ import (
 func serverTransports() []transports.ITransport {
 	return []transports.ITransport{
 		transportquic.New(),
+		transporthttp3.New(),
 		transportkcp.New(),
 		transportsctp.New(),
 		transportrawudp.New(),

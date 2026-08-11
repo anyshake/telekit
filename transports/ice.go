@@ -22,12 +22,12 @@ func NewICEAgent(urls []*stun.URI, options ...ice.AgentOption) (*ice.Agent, erro
 		ice.WithUrls(urls),
 		ice.WithNetworkTypes([]ice.NetworkType{ice.NetworkTypeUDP4, ice.NetworkTypeUDP6}),
 		ice.WithIncludeLoopback(),
-		// ICE is used as a long-lived data path. Keep the selected NAT
-		// mapping alive, but do not declare a temporarily congested path dead
-		// as quickly as the Pion defaults do.
+		// ICE is used as a long-lived data path. Keep the selected NAT mapping alive.
 		ice.WithKeepaliveInterval(2 * time.Second),
-		ice.WithDisconnectedTimeout(15 * time.Second),
-		ice.WithFailedTimeout(60 * time.Second),
+		// Keep alternate pairs checked so the controlling side can renominate
+		// an IPv6 pair when the selected IPv4 path becomes unavailable.
+		ice.WithRenomination(ice.DefaultNominationValueGenerator()),
+		ice.WithAutomaticRenomination(3 * time.Second),
 		// A shorter check interval reduces setup latency on high RTT paths.
 		// More binding attempts make transient loss during hole punching less
 		// likely to force a full reconnect.
@@ -119,12 +119,13 @@ func AcceptICE(ctx context.Context, agent *ice.Agent, remote ICEDescription) (*i
 	return agent.Accept(ctx, remote.UsernameFragment, remote.Password)
 }
 
-func ICEEndpoint(conn *ice.Conn, local, remote net.Addr) Endpoint {
+func ICEEndpoint(conn *ice.Conn, local, remote net.Addr, authKey []byte) Endpoint {
 	normalized := normalizedConn{Conn: conn}
 	return Endpoint{
 		Conn:       normalized,
 		PacketConn: NewPacketConn(normalized, local, remote),
 		LocalAddr:  local,
 		RemoteAddr: remote,
+		AuthKey:    append([]byte(nil), authKey...),
 	}
 }

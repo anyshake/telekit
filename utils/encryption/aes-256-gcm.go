@@ -3,16 +3,15 @@ package encryption
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha512"
 	"errors"
-	"io"
 
 	"golang.org/x/crypto/hkdf"
 )
 
 type AES256GCMimpl struct {
-	gcm cipher.AEAD
+	gcm   cipher.AEAD
+	nonce *nonceSource
 }
 
 func NewAES256GCM(secret []byte) (IEncryption, error) {
@@ -28,18 +27,23 @@ func NewAES256GCM(secret []byte) (IEncryption, error) {
 	if err != nil {
 		return nil, err
 	}
+	nonce, err := newNonceSource(gcm.NonceSize())
+	if err != nil {
+		return nil, err
+	}
 
-	return &AES256GCMimpl{gcm: gcm}, nil
+	return &AES256GCMimpl{gcm: gcm, nonce: nonce}, nil
 }
 
 func (impl *AES256GCMimpl) Encrypt(plaintext, aad []byte) ([]byte, error) {
 	nonce := make([]byte, impl.gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if err := impl.nonce.next(nonce); err != nil {
 		return nil, err
 	}
 
-	ciphertext := impl.gcm.Seal(nil, nonce, plaintext, aad)
-	return append(nonce, ciphertext...), nil
+	result := make([]byte, len(nonce), len(nonce)+len(plaintext)+impl.gcm.Overhead())
+	copy(result, nonce)
+	return impl.gcm.Seal(result, nonce, plaintext, aad), nil
 }
 
 func (impl *AES256GCMimpl) Decrypt(data, aad []byte) ([]byte, error) {

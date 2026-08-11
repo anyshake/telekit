@@ -15,10 +15,10 @@ Compared with a conventional public TCP/UDP service:
 | Application listener | Publicly reachable address and port       | No public application listener                     |
 | Discovery            | Clients connect directly to the collector | Both sides connect outward to signaling            |
 | Address disclosure   | Endpoint is visible before authentication | ICE data is released only after PSK authentication |
-| Data path            | Public server socket                      | Pion ICE path plus QUIC/KCP/SCTP/Raw UDP           |
+| Data path            | Public server socket                      | Pion ICE path plus QUIC/HTTP/3/KCP/SCTP/Raw UDP    |
 | Go integration       | `net.Conn`                                | `net.Conn`                                         |
 
-The trade-off is extra signaling and ICE complexity. Direct connectivity is not guaranteed, and strict or symmetric NATs may require TURN.
+The trade-off is extra signaling and ICE complexity. Direct connectivity is not guaranteed, and strict or symmetric NATs may require TURN. In addition to the default QUIC transport, applications can select the HTTP/3 transport; unauthenticated HTTP/3 requests can be served by a configured reverse-proxy fallback.
 
 ## Architecture
 
@@ -31,19 +31,12 @@ The trade-off is extra signaling and ICE complexity. Direct connectivity is not 
                                 │
                         outbound connections
                                 │
-        ┌───────────────────────┴──────────────────────┐
-        │                                              │
-sensor clients behind NAT                 collector server behind NAT
-        │                                              │
-        └── Pion ICE >>> QUIC / KCP / SCTP / Raw UDP ──┘
+        ┌───────────────────────┴───────────────────────────────┐
+        │                                                       │
+sensor clients behind NAT                          collector server behind NAT
+        │                                                       │
+        └── Pion ICE >>> QUIC / HTTP/3 / KCP / SCTP / Raw UDP ──┘
 ```
-
-- A room is one logical sensor network.
-- A room has one server and many clients.
-- Clients do not talk to each other through Telekit.
-- A client needs the room ID, timeout, PSK identity/key, and pinned server public key.
-- The QUIC transport uses the Hysteria `quic-go` fork with delivery-rate BBR and pacing, which fits high-latency or lossy ICE paths better than the stock loss-driven controller.
-- Signaling adapters carry opaque messages, so the peer layer stays independent of the Broker protocol.
 
 ## Security properties
 
@@ -53,6 +46,23 @@ sensor clients behind NAT                 collector server behind NAT
 - Each connection uses ephemeral X25519 and HKDF to derive its own session key.
 - Post-handshake signaling uses AEAD headers, sequence numbers, and replay windows.
 - Application frames are encrypted with the session key and the selected transport's own mechanisms.
+- HTTP/3 transport data is carried in an authenticated HTTP/3 request body. Invalid HTTP/3 requests are handled by the configured fallback site.
+
+Configure the HTTP/3 transport on the server with a real certificate and an
+upstream fallback website:
+
+```go
+transporthttp3.New(
+    transporthttp3.WithTLSConfig(serverTLSConfig),
+    transporthttp3.WithFallbackURL("https://www.example.com"),
+)
+```
+
+The fallback is only used when the HTTP/3 request does not contain a valid
+Telekit session token. The default self-signed certificate is suitable for
+development; production deployments should use a certificate matching the
+configured server name.
+
 - Frame sizes, buffers, handshakes, connection counts, and request rates are bounded by configuration.
 
 _The signaling service can still observe routing identifiers, timing, and ciphertext sizes, and can drop, delay, replay, or flood messages. STUN/TURN servers see the network information required by their protocols. An authenticated but compromised client can disclose the Candidate information for that connection._
@@ -94,7 +104,7 @@ centrifugoAdapter, _ := centrifugo.NewAdapter(
 
 Both peers must use the same base route, and Broker ACLs must authorize it. Each route segment accepts only letters, digits, underscores, and hyphens.
 
-All signaling adapters expose `WithReconnectBackoff(...)`, `WithOnConnect(...)`, `WithConnectionLostHandler(...)`, and `WithReconnectingHandler(...)` (NATS also exposes `WithMaxReconnects(...)`). MQTT uses QoS 1 by default and restores subscriptions after reconnecting. Reconnection restores signaling only; applications must redial a closed data transport.
+All signaling adapters expose `WithReconnectBackoff(...)`, `WithOnConnect(...)`, `WithConnectionLostHandler(...)`, and `WithReconnectingHandler(...)` (NATS also exposes `WithMaxReconnects(...)`). MQTT uses QoS 1 by default and restores subscriptions after reconnecting. A client also attempts one fresh signaling handshake and ICE negotiation when the application heartbeat declares a data transport dead; this creates a new session and does not resume buffered application data.
 
 ## `net.Conn` API
 
@@ -147,29 +157,6 @@ for {
 ```
 
 Connections expose only the standard `net.Conn` contract: reads, writes, close, addresses, and read/write deadlines. Data-channel message callbacks are an internal transport detail.
-
-## Examples
-
-The [`example`](./example) directory contains independent `net.Conn`, P2P Proxy, P2P DNS, and P2P SSH examples:
-
-```sh
-$ go run ./example/netconn/server -room example-netconn -secret change@me
-$ go run ./example/netconn/client -room example-netconn -client-id sensor-01 -secret change@me
-```
-
-Both programs support `-mqtt` and `-mqtt-base-topic`; the client and server values must match. The shared passphrase and embedded identity are for demonstration only. Production deployments should use a random PSK per device and a private server identity, as described in [`example/README.md`](./example/README.md).
-
-The `p2pssh` example provides SSH shell access, SFTP, and SSH `direct-tcpip` forwarding through Telekit. Unix builds provide PTY-backed shell sessions; Windows builds provide only SFTP and TCP forwarding. See [`example/README.md`](./example/README.md) for commands and options.
-
-## Deployment boundaries
-
-- The Broker requires authentication and narrow topic/subject/channel ACLs.
-- The built-in WebSocket Broker denies all connections until `WithAuthorization` is configured.
-- Strict NATs may require a reachable TURN relay; a direct path is not guaranteed.
-- One server per room is enforced within a process and signaling domain. Multiple instances still need an external lease or leader election.
-- `net.Conn` compatibility does not imply `*net.TCPConn`, `syscall.Conn`, or transparent session migration.
-- A closed selected transport ends the current connection; application protocols should support reconnectable, idempotent, or resumable transfers.
-- This is security-sensitive networking code and should receive an independent review before high-risk deployment.
 
 ## License
 

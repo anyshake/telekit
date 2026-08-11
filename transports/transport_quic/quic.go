@@ -35,7 +35,7 @@ func (t Transport) Dial(ctx context.Context, endpoint transports.Endpoint) (net.
 	if err != nil {
 		return nil, err
 	}
-	installCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
+	InstallCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
 	stream, err := session.OpenStreamSync(ctx)
 	if err != nil {
 		_ = session.CloseWithError(0, "stream open failed")
@@ -64,7 +64,7 @@ func (t Transport) Accept(ctx context.Context, endpoint transports.Endpoint) (ne
 	if err != nil {
 		return nil, err
 	}
-	installCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
+	InstallCongestionControl(session, congestionRemoteAddr(endpoint), config, t.bbrProfile, t.brutalBandwidth)
 	stream, err := session.AcceptStream(ctx)
 	if err != nil {
 		_ = session.CloseWithError(0, "stream accept failed")

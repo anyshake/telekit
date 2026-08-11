@@ -24,6 +24,12 @@ type Transport struct {
 
 func (t Transport) Name() string { return "raw_udp" }
 
+func (Transport) PacketMode() bool { return true }
+
+// MaxFrameSize leaves room for the peer length prefix and AEAD overhead on a
+// conservative IPv4/IPv6 path MTU.
+func (Transport) MaxFrameSize() int { return 1100 }
+
 func (t Transport) Dial(ctx context.Context, endpoint transports.Endpoint) (net.Conn, error) {
 	if endpoint.Conn == nil {
 		return nil, errors.New("unsupported transport")

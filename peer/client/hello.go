@@ -116,7 +116,7 @@ func (c *Client) buildClientHello(handshakeCodec *peer.Codec) (*clientHandshake,
 			ClientEphemeralKey: publicKey,
 			HandshakeRoomID:    c.api.RoomId,
 			HandshakeClientID:  c.clientId,
-			Timestamp:          []byte(c.options.TimeFunc().UTC().Format(time.RFC3339Nano)),
+			Timestamp:          []byte(c.options.GetTimeFunc().UTC().Format(time.RFC3339Nano)),
 		},
 	})
 	if err != nil {

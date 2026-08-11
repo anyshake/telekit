@@ -10,14 +10,16 @@ type Stream struct {
 	session *Session
 	id      uint32
 
-	incoming  chan []byte
-	closed    chan struct{}
-	remoteEOF chan struct{}
-	writeEOF  chan struct{}
-	closeOnce sync.Once
-	readMu    sync.Mutex
-	writeMu   sync.Mutex
-	pending   []byte
+	incomingMu     sync.Mutex
+	incomingQueue  [][]byte
+	incomingBytes  int
+	incomingNotify chan struct{}
+	closed         chan struct{}
+	remoteEOF      chan struct{}
+	writeEOF       chan struct{}
+	closeOnce      sync.Once
+	readMu         sync.Mutex
+	writeMu        sync.Mutex
 
 	openResult chan error
 	responseMu sync.Mutex
@@ -27,13 +29,54 @@ type Stream struct {
 
 func newStream(session *Session, id uint32) *Stream {
 	return &Stream{
-		session:   session,
-		id:        id,
-		incoming:  make(chan []byte, 32),
-		closed:    make(chan struct{}),
-		remoteEOF: make(chan struct{}),
-		writeEOF:  make(chan struct{}),
+		session:        session,
+		id:             id,
+		incomingNotify: make(chan struct{}, 1),
+		closed:         make(chan struct{}),
+		remoteEOF:      make(chan struct{}),
+		writeEOF:       make(chan struct{}),
 	}
+}
+
+func (s *Stream) enqueue(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	s.incomingMu.Lock()
+	defer s.incomingMu.Unlock()
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	if s.incomingBytes+len(data) > maxStreamQueue {
+		return false
+	}
+	s.incomingQueue = append(s.incomingQueue, data)
+	s.incomingBytes += len(data)
+	select {
+	case s.incomingNotify <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (s *Stream) dequeue(p []byte) int {
+	s.incomingMu.Lock()
+	defer s.incomingMu.Unlock()
+	if len(s.incomingQueue) == 0 {
+		return 0
+	}
+	data := s.incomingQueue[0]
+	n := copy(p, data)
+	if n == len(data) {
+		s.incomingQueue[0] = nil
+		s.incomingQueue = s.incomingQueue[1:]
+	} else {
+		s.incomingQueue[0] = data[n:]
+	}
+	s.incomingBytes -= n
+	return n
 }
 
 func (s *Stream) Write(p []byte) (int, error) {
@@ -81,35 +124,26 @@ func (s *Stream) CloseWrite() error {
 func (s *Stream) Read(p []byte) (int, error) {
 	s.readMu.Lock()
 	defer s.readMu.Unlock()
-	if len(s.pending) > 0 {
-		n := copy(p, s.pending)
-		s.pending = s.pending[n:]
-		return n, nil
-	}
 	for {
-		select {
-		case data := <-s.incoming:
-			if len(data) == 0 {
-				continue
-			}
-			n := copy(p, data)
-			if n < len(data) {
-				s.pending = append(s.pending[:0], data[n:]...)
-			}
+		if n := s.dequeue(p); n > 0 {
 			return n, nil
+		}
+		select {
+		case <-s.incomingNotify:
+			continue
 		case <-s.closed:
-			if len(s.incoming) != 0 {
-				continue
+			if n := s.dequeue(p); n > 0 {
+				return n, nil
 			}
 			return 0, io.EOF
 		case <-s.remoteEOF:
-			if len(s.incoming) != 0 {
-				continue
+			if n := s.dequeue(p); n > 0 {
+				return n, nil
 			}
 			return 0, io.EOF
 		case <-s.session.done:
-			if len(s.incoming) != 0 {
-				continue
+			if n := s.dequeue(p); n > 0 {
+				return n, nil
 			}
 			return 0, io.EOF
 		}

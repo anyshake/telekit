@@ -10,7 +10,7 @@ import (
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
 	"github.com/anyshake/telekit/transports"
-	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
+	transportquic "github.com/anyshake/telekit/transports/transport_quic"
 	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -32,6 +32,9 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	if options.KeyProvider == nil {
 		return nil, errors.New("pre-shared key provider is required")
 	}
+	if options.GetTimeFunc == nil {
+		options.GetTimeFunc = time.Now
+	}
 	if len(options.IdentityKey) != ed25519.PrivateKeySize {
 		return nil, errors.New("Ed25519 server identity key is required")
 	}
@@ -46,7 +49,7 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		}
 		options.Transports = []transports.ITransport{options.Transport}
 	} else if len(options.Transports) == 0 {
-		options.Transports = []transports.ITransport{transportrawudp.New()}
+		options.Transports = []transports.ITransport{transportquic.New()}
 	} else {
 		options.Transports = append([]transports.ITransport(nil), options.Transports...)
 	}
@@ -91,7 +94,7 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		options.MaxPendingHandshakes = DEFAULT_MAX_HANDSHAKES
 	}
 	if options.HandshakeTimeout == 0 {
-		options.HandshakeTimeout = 30 * time.Second
+		options.HandshakeTimeout = DEFAULT_HANDSHAKE_TIMEOUT
 	}
 	if options.HelloRateLimit == 0 {
 		options.HelloRateLimit = 100
@@ -111,7 +114,7 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		return nil, errors.New("compressed frame size exceeds decompression safety limit")
 	}
 	if options.EncryptionType == "" {
-		options.EncryptionType = encryption.XCHACHA20_POLY1305
+		options.EncryptionType = encryption.CHACHA20_POLY1305
 	}
 	if len(options.EncryptionAAD) == 0 {
 		options.EncryptionAAD = []byte("telekit/v1")

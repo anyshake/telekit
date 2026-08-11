@@ -13,12 +13,12 @@ func (s *Server) isNonceAvailable(nonce []byte) bool {
 
 	if t, ok := s.nonceCache.Get(str); ok {
 		timeObj := time.UnixMilli(t)
-		if time.Since(timeObj) < s.options.ReplayProtection {
+		if s.options.GetTimeFunc().Sub(timeObj) < s.options.ReplayProtection {
 			return false
 		}
 	}
 
-	s.nonceCache.Add(str, time.Now().UnixMilli())
+	s.nonceCache.Add(str, s.options.GetTimeFunc().UnixMilli())
 	return true
 }
 

@@ -16,7 +16,6 @@ func defaultConfig() *quic.Config {
 		DisablePathMTUDiscovery:        true,
 		HandshakeIdleTimeout:           15 * time.Second,
 		MaxIdleTimeout:                 5 * time.Minute,
-		KeepAlivePeriod:                15 * time.Second,
 		InitialStreamReceiveWindow:     4 << 20,
 		MaxStreamReceiveWindow:         32 << 20,
 		InitialConnectionReceiveWindow: 8 << 20,

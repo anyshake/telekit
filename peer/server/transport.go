@@ -26,3 +26,16 @@ func transportNames(available []transports.ITransport) []string {
 	}
 	return names
 }
+
+func transportPacketMode(transport transports.ITransport) bool {
+	behavior, ok := transport.(transports.PacketModeTransport)
+	return ok && behavior.PacketMode()
+}
+
+func transportMaxFrameSize(transport transports.ITransport) int {
+	behavior, ok := transport.(transports.MaxFrameSizeTransport)
+	if !ok {
+		return 0
+	}
+	return behavior.MaxFrameSize()
+}

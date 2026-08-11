@@ -40,8 +40,9 @@ func (c *Connection) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	frameLimit := c.maxFrameSize()
 	for plaintextOffset := 0; plaintextOffset < originalLen; {
-		plaintextEnd := min(plaintextOffset+c.owner.options.MaxFrameSize-64, originalLen)
+		plaintextEnd := min(plaintextOffset+frameLimit-64, originalLen)
 		var ciphertext []byte
 		for {
 			var err error
@@ -49,7 +50,7 @@ func (c *Connection) Write(p []byte) (int, error) {
 			if err != nil {
 				return plaintextOffset, err
 			}
-			if len(ciphertext) <= c.owner.options.MaxFrameSize {
+			if len(ciphertext) <= frameLimit {
 				break
 			}
 			if plaintextEnd-plaintextOffset <= 1 {

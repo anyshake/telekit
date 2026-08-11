@@ -32,7 +32,7 @@ func parseCLIArguments() *arguments {
 	flag.StringVar(&args.preSharedKey, "secret", "change@me", "Telekit pre-shared passphrase")
 	flag.StringVar(&args.serverPubKey, "server-public-key", demoServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "connection timeout")
-	flag.StringVar(&args.transport, "transport", "quic", "data transport (quic, kcp, sctp, rawudp)")
+	flag.StringVar(&args.transport, "transport", "quic", "data transport (quic, http3, kcp, sctp, rawudp)")
 	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferSize, "receive-buffer-bytes", 8<<20, "maximum unread stream data")

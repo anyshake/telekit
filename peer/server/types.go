@@ -25,6 +25,7 @@ const (
 	DEFAULT_MAX_FRAME_SIZE        = 4 << 20
 	DEFAULT_MAX_PENDING_ICE       = 128
 	DEFAULT_MAX_PENDING_ICE_BYTES = 256 << 10
+	DEFAULT_HANDSHAKE_TIMEOUT     = 30 * time.Second
 	DEFAULT_MAX_CONNECTIONS       = 1024
 	DEFAULT_MAX_HANDSHAKES        = 256
 	DEFAULT_MAX_BUFFERED          = 256 << 20
@@ -33,6 +34,9 @@ const (
 type Options struct {
 	// ICEAgentOptions are passed to the Pion ICE agent created for each connection.
 	ICEAgentOptions []ice.AgentOption
+	// GetTimeFunc returns the current time used by handshake, replay, keepalive,
+	// and deadline checks. If nil, time.Now is used.
+	GetTimeFunc func() time.Time
 	// LRUSize is the capacity of the replay-protection nonce cache.
 	LRUSize int
 	// ReplayProtection is the retention period for seen handshake nonces.
@@ -44,12 +48,12 @@ type Options struct {
 	// IdentityKey signs ServerHello transcripts. Clients pin the corresponding
 	// Ed25519 public key before connecting.
 	IdentityKey ed25519.PrivateKey
-	// Transport configures one data transport. Nil defaults to raw UDP when
+	// Transport configures one data transport. Nil defaults to reliable QUIC when
 	// Transports is also empty.
 	Transport transports.ITransport
 	// Transports advertises the data transports accepted after ICE.
 	Transports []transports.ITransport
-	// EncryptionType selects the frame cipher. Empty uses XChaCha20-Poly1305.
+	// EncryptionType selects the frame cipher. Empty uses ChaCha20-Poly1305.
 	EncryptionType string
 	// EncryptionAAD is additional authenticated data included in each frame.
 	EncryptionAAD []byte
@@ -107,17 +111,18 @@ type Connection struct {
 	clientEphemeralKey []byte
 	serverEphemeralKey []byte
 
-	transportConn     net.Conn
-	lastTransportRead atomic.Int64
-	established       atomic.Bool
-	iceAgent          *ice.Agent
-	localAddr         peer.Addr
-	remoteAddr        peer.Addr
-	selectedTransport string
-	pendingICEOffer   *transports.ICEDescription
-	pendingICE        []webrtc.ICECandidateInit
-	pendingICEBytes   int
-	stateMu           sync.RWMutex
+	transportConn         net.Conn
+	lastTransportRead     atomic.Int64
+	established           atomic.Bool
+	iceAgent              *ice.Agent
+	localAddr             peer.Addr
+	remoteAddr            peer.Addr
+	selectedTransport     string
+	transportMaxFrameSize int
+	pendingICEOffer       *transports.ICEDescription
+	pendingICE            []webrtc.ICECandidateInit
+	pendingICEBytes       int
+	stateMu               sync.RWMutex
 
 	writeMu sync.Mutex
 

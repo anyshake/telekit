@@ -17,6 +17,7 @@ const (
 	frameHeaderSize = 9
 	maxFramePayload = 64 << 10
 	maxTargetLength = 4 << 10
+	maxStreamQueue  = 4 << 20
 )
 
 var ErrClosed = net.ErrClosed

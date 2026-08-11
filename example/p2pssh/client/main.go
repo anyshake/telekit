@@ -94,7 +94,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 		case <-proxy.Done():
-			log.Println("Telekit server disconnected; stopping client")
+			log.Println("Telekit proxy closed; stopping client")
 			proxy.Close()
 		}
 

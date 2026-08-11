@@ -83,7 +83,6 @@ func (p *telekitProxy) ensureSession(ctx context.Context) (*streammux.Session, e
 		p.cfg,
 		p.clientID,
 		"multiplex-session",
-		p.notifyDisconnected,
 	)
 	if err != nil {
 		return nil, err
@@ -94,12 +93,6 @@ func (p *telekitProxy) ensureSession(ctx context.Context) (*streammux.Session, e
 	p.mux = streammux.NewClient(remote)
 
 	return p.mux, nil
-}
-
-func (p *telekitProxy) notifyDisconnected() {
-	p.doneOnce.Do(func() {
-		close(p.done)
-	})
 }
 
 func (p *telekitProxy) resetSession(session *streammux.Session) {
@@ -133,7 +126,6 @@ func dialTelekitSession(
 	cfg telekitSessionConfig,
 	clientID string,
 	localAddr string,
-	onDisconnected func(),
 ) (*client.Client, signaling.Adapter, error) {
 	log.Printf(
 		"p2pssh[%s]: connecting MQTT broker=%s client_id=%q",
@@ -191,9 +183,6 @@ func dialTelekitSession(
 			MaxPendingICE:      cfg.maxPendingICE,
 			MaxPendingICEBytes: cfg.maxPendingICEBytes,
 			Transport:          cfg.transport,
-			OnDisconnected: func(*client.Client) {
-				onDisconnected()
-			},
 		},
 	)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/anyshake/telekit/example/p2proxy/common"
 	"github.com/anyshake/telekit/peer"
 	peerserver "github.com/anyshake/telekit/peer/server"
+	"github.com/pion/ice/v4"
 )
 
 func init() {
@@ -41,9 +42,10 @@ func main() {
 	listener, err := peerserver.NewListener(args.room, adapter, peer.KeyProviderFunc(func(string) ([]byte, error) {
 		return append([]byte(nil), key[:]...), nil
 	}), &peerserver.Options{
-		IdentityKey:    identityKey,
-		EncryptionType: encryptionType,
-		Transports:     common.ServerTransports(),
+		IdentityKey:        identityKey,
+		Transports:         common.ServerTransports(),
+		OnICECandidate:     func(c *peerserver.Connection, cd ice.Candidate) { log.Printf("exchange candidate: %v", cd.Address()) },
+		OnConnectionFailed: func(c *peerserver.Connection, err error) { log.Printf("connection failed: %v", err) },
 	}, common.APIOptions()...)
 	if err != nil {
 		log.Fatalln(err)

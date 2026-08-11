@@ -2,17 +2,16 @@ package encryption
 
 import (
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha512"
 	"errors"
-	"io"
 
 	"github.com/cloudflare/circl/cipher/ascon"
 	"golang.org/x/crypto/hkdf"
 )
 
 type Ascon128aImpl struct {
-	aead cipher.AEAD
+	aead  cipher.AEAD
+	nonce *nonceSource
 }
 
 func NewAscon128a(secret []byte) (IEncryption, error) {
@@ -25,18 +24,23 @@ func NewAscon128a(secret []byte) (IEncryption, error) {
 	if err != nil {
 		return nil, err
 	}
+	nonce, err := newNonceSource(aead.NonceSize())
+	if err != nil {
+		return nil, err
+	}
 
-	return &Ascon128aImpl{aead: aead}, nil
+	return &Ascon128aImpl{aead: aead, nonce: nonce}, nil
 }
 
 func (impl *Ascon128aImpl) Encrypt(plaintext, aad []byte) ([]byte, error) {
 	nonce := make([]byte, impl.aead.NonceSize()) // 16 bytes
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if err := impl.nonce.next(nonce); err != nil {
 		return nil, err
 	}
 
-	ciphertext := impl.aead.Seal(nil, nonce, plaintext, aad)
-	return append(nonce, ciphertext...), nil
+	result := make([]byte, len(nonce), len(nonce)+len(plaintext)+impl.aead.Overhead())
+	copy(result, nonce)
+	return impl.aead.Seal(result, nonce, plaintext, aad), nil
 }
 
 func (impl *Ascon128aImpl) Decrypt(data, aad []byte) ([]byte, error) {

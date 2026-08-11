@@ -18,7 +18,10 @@ import (
 	"github.com/apernet/quic-go/congestion"
 )
 
-func installCongestionControl(session *quic.Conn, remote net.Addr, config *quic.Config, profile bbr.Profile, brutalBandwidth uint64) {
+// InstallCongestionControl installs Telekit's BBR or Brutal sender on an
+// established QUIC connection. It is also used by the HTTP/3 transport,
+// since HTTP/3 runs on the same quic.Conn implementation.
+func InstallCongestionControl(session *quic.Conn, remote net.Addr, config *quic.Config, profile bbr.Profile, brutalBandwidth uint64) {
 	if session == nil {
 		return
 	}

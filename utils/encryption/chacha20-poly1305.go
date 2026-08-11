@@ -2,17 +2,16 @@ package encryption
 
 import (
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha512"
 	"errors"
-	"io"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
 
 type ChaCha20Poly1305Impl struct {
-	aead cipher.AEAD
+	aead  cipher.AEAD
+	nonce *nonceSource
 }
 
 func NewChaCha20Poly1305(secret []byte) (IEncryption, error) {
@@ -23,18 +22,23 @@ func NewChaCha20Poly1305(secret []byte) (IEncryption, error) {
 	if err != nil {
 		return nil, err
 	}
+	nonce, err := newNonceSource(aead.NonceSize())
+	if err != nil {
+		return nil, err
+	}
 
-	return &ChaCha20Poly1305Impl{aead: aead}, nil
+	return &ChaCha20Poly1305Impl{aead: aead, nonce: nonce}, nil
 }
 
 func (impl *ChaCha20Poly1305Impl) Encrypt(plaintext, aad []byte) ([]byte, error) {
 	nonce := make([]byte, impl.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if err := impl.nonce.next(nonce); err != nil {
 		return nil, err
 	}
 
-	ciphertext := impl.aead.Seal(nil, nonce, plaintext, aad)
-	return append(nonce, ciphertext...), nil
+	result := make([]byte, len(nonce), len(nonce)+len(plaintext)+impl.aead.Overhead())
+	copy(result, nonce)
+	return impl.aead.Seal(result, nonce, plaintext, aad), nil
 }
 
 func (impl *ChaCha20Poly1305Impl) Decrypt(data, aad []byte) ([]byte, error) {
