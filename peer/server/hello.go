@@ -12,6 +12,30 @@ import (
 	"github.com/anyshake/telekit/signaling"
 )
 
+var errReplayedClientHello = errors.New("client hello nonce was replayed")
+
+// prepareClientHello validates a new hello before replacing an existing
+// session. A replay must not be allowed to close the currently active
+// connection.
+func (s *Server) prepareClientHello(existing *Connection, nonce, clientEphemeralKey []byte) (bool, error) {
+	if existing != nil && existing.transportConnValue() == nil && existing.selectedTransport == "" &&
+		bytes.Equal(existing.clientNonce, nonce) && bytes.Equal(existing.clientEphemeralKey, clientEphemeralKey) {
+		// QoS transports may duplicate an authenticated hello. Re-send the
+		// same pending session without accepting a different proof.
+		return true, nil
+	}
+	if !s.isNonceAvailable(nonce) {
+		return false, errReplayedClientHello
+	}
+	if existing != nil {
+		// The nonce is fresh, so this is a legitimate new session. Replace the
+		// previous session without depending on EOF propagation from its old
+		// transport.
+		_ = existing.Close()
+	}
+	return false, nil
+}
+
 func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 	header, err := s.defaultCodec.DecodeMessageHeader(data)
 	if err != nil {
@@ -19,7 +43,7 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 	}
 
 	if header.TargetId == "" && header.Type == peer.MessageTypeClientHello {
-		existing, hasExisting := s.connections.Get(header.SourceId)
+		existing, _ := s.connections.Get(header.SourceId)
 		if !s.isClientIdValid(header.SourceId) {
 			err := fmt.Errorf("rejected connection from %s due to server restrictions", header.SourceId)
 			if s.options.OnNewClientReject != nil {
@@ -68,22 +92,12 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if delta := s.options.GetTimeFunc().Sub(timestamp); delta > s.options.ClockSkew || delta < -s.options.ClockSkew {
 			return nil, fmt.Errorf("timestamp from %s is outside allowed clock skew", header.SourceId)
 		}
-		if hasExisting {
-			if existing.transportConnValue() == nil && existing.selectedTransport == "" &&
-				bytes.Equal(existing.clientNonce, nonce) &&
-				bytes.Equal(existing.clientEphemeralKey, message.Payload.ClientEphemeralKey) {
-				// QoS transports may duplicate an authenticated hello. Re-send the
-				// same pending session without accepting a different proof.
-				return existing, nil
-			}
-			// A new hello has already been authenticated with the client's PSK.
-			// Replace the previous session so reconnect does not depend on the
-			// old transport or an asynchronous disconnect callback noticing EOF
-			// before this hello arrives.
-			_ = existing.Close()
-		}
-		if !s.isNonceAvailable(nonce) {
+		reuse, err := s.prepareClientHello(existing, nonce, message.Payload.ClientEphemeralKey)
+		if err != nil {
 			return nil, fmt.Errorf("received replayed nonce from %s", header.SourceId)
+		}
+		if reuse {
+			return existing, nil
 		}
 		if s.options.OnNewClientJoin != nil {
 			if accept := s.options.OnNewClientJoin(s.connections, header.SourceId); !accept {
