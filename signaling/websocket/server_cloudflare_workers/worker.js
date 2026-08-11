@@ -1,9 +1,8 @@
 import { extractRoomID, validateRoomID } from "./src/core.js";
+import { ROOM_PREFIX, SIGNALING_TOKEN } from "./src/config.js";
 import { SignalingRoom } from "./src/durable-object.js";
 
 export { SignalingRoom };
-
-const ROOM_PREFIX = "/ws";
 
 export default {
   async fetch(request, env) {
@@ -39,7 +38,7 @@ function authorize(request, roomID, env) {
     return { accepted: false, status: 400, reason: "Invalid room ID" };
   }
 
-  const token = env.SIGNALING_TOKEN ?? "passme";
+  const token = env.SIGNALING_TOKEN ?? SIGNALING_TOKEN;
   if (request.url.searchParams.get("token") !== token) {
     return { accepted: false, status: 403, reason: "WebSocket room access denied" };
   }
