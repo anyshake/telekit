@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/anyshake/telekit/transports"
+	transporthttp3 "github.com/anyshake/telekit/transports/transport_http3"
 	transportkcp "github.com/anyshake/telekit/transports/transport_kcp"
 	transportquic "github.com/anyshake/telekit/transports/transport_quic"
 	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
@@ -14,6 +15,8 @@ func createTransport(name string) (transports.ITransport, error) {
 	switch name {
 	case "quic":
 		return transportquic.New(), nil
+	case "http3":
+		return transporthttp3.New(), nil
 	case "kcp":
 		return transportkcp.New(), nil
 	case "sctp":

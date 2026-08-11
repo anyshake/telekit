@@ -67,7 +67,7 @@ func (c *Client) writeTimedOut() bool {
 	c.deadlineMu.RLock()
 	deadline := c.writeDeadline
 	c.deadlineMu.RUnlock()
-	return !deadline.IsZero() && time.Now().After(deadline)
+	return !deadline.IsZero() && c.options.GetTimeFunc().After(deadline)
 }
 
 func (c *Client) setTransportConn(conn net.Conn) {
@@ -93,14 +93,16 @@ func (c *Client) finishTransport(conn net.Conn) bool {
 	c.stateMu.Unlock()
 
 	c.setIsConnected(false)
-	c.recvBuf.Load().Close()
+	c.recvBuf.Load().Reset()
 	_ = conn.Close()
 	if agent != nil {
 		_ = agent.Close()
 	}
+	reconnectGeneration := c.reconnectGeneration.Add(1)
 	if c.options.OnDisconnected != nil {
 		c.options.OnDisconnected(c)
 	}
+	go c.reconnectAfterTransportFailure(reconnectGeneration)
 	return true
 }
 

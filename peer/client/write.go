@@ -40,8 +40,12 @@ func (c *Client) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	frameLimit := c.options.MaxFrameSize
+	if transportLimit := transportMaxFrameSize(c.options.Transport); transportLimit > 0 && frameLimit > transportLimit {
+		frameLimit = transportLimit
+	}
 	for plaintextOffset := 0; plaintextOffset < originalLen; {
-		plaintextEnd := min(plaintextOffset+c.options.MaxFrameSize-64, originalLen)
+		plaintextEnd := min(plaintextOffset+frameLimit-64, originalLen)
 		var ciphertext []byte
 		for {
 			var err error
@@ -49,7 +53,7 @@ func (c *Client) Write(p []byte) (int, error) {
 			if err != nil {
 				return plaintextOffset, err
 			}
-			if len(ciphertext) <= c.options.MaxFrameSize {
+			if len(ciphertext) <= frameLimit {
 				break
 			}
 			if plaintextEnd-plaintextOffset <= 1 {

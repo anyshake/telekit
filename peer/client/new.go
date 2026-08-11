@@ -6,7 +6,7 @@ import (
 
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
-	transportrawudp "github.com/anyshake/telekit/transports/transport_rawudp"
+	transportquic "github.com/anyshake/telekit/transports/transport_quic"
 	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 )
@@ -28,19 +28,19 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	}
 
 	if options.EncryptionType == "" {
-		options.EncryptionType = encryption.XCHACHA20_POLY1305
+		options.EncryptionType = encryption.CHACHA20_POLY1305
 	}
 	if len(options.EncryptionAAD) == 0 {
 		options.EncryptionAAD = []byte("telekit/v1")
 	}
-	if options.TimeFunc == nil {
-		options.TimeFunc = time.Now
+	if options.GetTimeFunc == nil {
+		options.GetTimeFunc = time.Now
 	}
 	if options.Timeout == 0 {
 		options.Timeout = DEFAULT_TIMEOUT
 	}
 	if options.Transport == nil {
-		options.Transport = transportrawudp.New()
+		options.Transport = transportquic.New()
 	}
 	if options.Transport.Name() == "" {
 		return nil, errors.New("client transport name is empty")

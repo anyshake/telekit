@@ -56,7 +56,6 @@ func main() {
 	}
 
 	key := sha256.Sum256([]byte(args.preSharedKey))
-	disconnected := make(chan struct{}, 1)
 	conn, err := client.NewClient(
 		peer.PreSharedKey{ClientID: args.clientID, Key: key[:], ServerPublicKey: serverPublicKey},
 		peerAPI,
@@ -75,7 +74,7 @@ func main() {
 			OnClientHello:      handleClientHello,
 			OnServerHello:      handleServerHello,
 			OnConnectionFailed: handleConnectionFailed,
-			OnDisconnected:     handleDisconnected(disconnected),
+			OnDisconnected:     handleDisconnected,
 		},
 	)
 	if err != nil {
@@ -102,8 +101,6 @@ func main() {
 		fmt.Print("> ")
 		select {
 		case <-ctx.Done():
-			return
-		case <-disconnected:
 			return
 		case line, ok := <-lines:
 			if !ok {

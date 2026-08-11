@@ -33,13 +33,15 @@ const (
 )
 
 type Codec struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	secret []byte
 	typ    string
 
 	encryptionKit  encryption.IEncryption
 	additionalData []byte
 	useCompress    bool
+	dataAAD        []byte
+	headerAAD      []byte
 }
 
 func createEncryptKit(encryptionType string, secret []byte) (encryption.IEncryption, error) {
@@ -69,13 +71,16 @@ func NewCodec(encryptionType string, secret, additionalData []byte, useCompress 
 		return nil, err
 	}
 
-	return &Codec{
+	codec := &Codec{
 		encryptionKit:  encryptionKit,
 		additionalData: append([]byte(nil), additionalData...),
 		useCompress:    useCompress,
 		secret:         append([]byte(nil), secret...),
 		typ:            encryptionType,
-	}, nil
+	}
+	codec.dataAAD = codec.buildAdditionalData(codec.additionalData, useCompress, aadDomainData, nil)
+	codec.headerAAD = codec.buildAdditionalData(codec.additionalData, useCompress, aadDomainHeader, nil)
+	return codec, nil
 }
 
 func (e *Codec) UpdateSecret(encryptionType string, secret []byte) error {
@@ -94,8 +99,8 @@ func (e *Codec) UpdateSecret(encryptionType string, secret []byte) error {
 }
 
 func (e *Codec) GetSecret() (typ string, secret []byte) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
 	return e.typ, append([]byte(nil), e.secret...)
 }
@@ -109,9 +114,10 @@ func (e *Codec) encodeWithEncryption(data []byte, domain byte, context []byte) (
 		return nil, fmt.Errorf("message data is empty")
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.encryptionKit == nil {
+	e.mu.RLock()
+	encryptionKit := e.encryptionKit
+	e.mu.RUnlock()
+	if encryptionKit == nil {
 		return nil, fmt.Errorf("encryption kit is not set")
 	}
 
@@ -125,8 +131,8 @@ func (e *Codec) encodeWithEncryption(data []byte, domain byte, context []byte) (
 		}
 	}
 
-	finalAAD := e.buildAdditionalData(e.additionalData, e.useCompress, domain, context)
-	dataBytes, err = e.encryptionKit.Encrypt(dataBytes, finalAAD)
+	finalAAD := e.additionalDataFor(domain, context)
+	dataBytes, err = encryptionKit.Encrypt(dataBytes, finalAAD)
 	if err != nil {
 		return nil, err
 	}
@@ -190,14 +196,15 @@ func (e *Codec) decodeWithDecryption(data []byte, domain byte, context []byte, m
 		return nil, fmt.Errorf("data is empty")
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.encryptionKit == nil {
+	e.mu.RLock()
+	encryptionKit := e.encryptionKit
+	e.mu.RUnlock()
+	if encryptionKit == nil {
 		return nil, fmt.Errorf("encryption kit is not set")
 	}
 
-	finalAAD := e.buildAdditionalData(e.additionalData, e.useCompress, domain, context)
-	dataBytes, err := e.encryptionKit.Decrypt(data, finalAAD)
+	finalAAD := e.additionalDataFor(domain, context)
+	dataBytes, err := encryptionKit.Decrypt(data, finalAAD)
 	if err != nil {
 		return nil, err
 	}
@@ -318,15 +325,31 @@ func validateDataChunks(dataChunks [][]byte) error {
 
 func (e *Codec) buildAdditionalData(aad []byte, compression bool, domain byte, context []byte) []byte {
 	buf := make([]byte, 0, 24+len(aad)+len(context))
-	buf = append(buf, 0x02)                                      // protocol version
-	buf = append(buf, byte(lo.Ternary(compression, 0x01, 0x00))) // compression flag
-	buf = append(buf, domain)                                    // cryptographic domain
-	buf = append(buf, make([]byte, 15)...)                       // reserved for future use
-	buf = append(buf, uint8(len(aad)))                           // length of user-defined AAD
-	buf = append(buf, aad...)                                    // content of user-defined AAD
+	buf = append(buf, 0x02) // protocol version
+	if compression {
+		buf = append(buf, 0x01) // compression flag
+	} else {
+		buf = append(buf, 0x00) // compression flag
+	}
+	buf = append(buf, domain)              // cryptographic domain
+	buf = append(buf, make([]byte, 15)...) // reserved for future use
+	buf = append(buf, uint8(len(aad)))     // length of user-defined AAD
+	buf = append(buf, aad...)              // content of user-defined AAD
 	var contextLength [4]byte
 	binary.BigEndian.PutUint32(contextLength[:], uint32(len(context)))
 	buf = append(buf, contextLength[:]...)
 	buf = append(buf, context...)
 	return buf
+}
+
+func (e *Codec) additionalDataFor(domain byte, context []byte) []byte {
+	if len(context) == 0 {
+		switch domain {
+		case aadDomainData:
+			return e.dataAAD
+		case aadDomainHeader:
+			return e.headerAAD
+		}
+	}
+	return e.buildAdditionalData(e.additionalData, e.useCompress, domain, context)
 }

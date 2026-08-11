@@ -36,6 +36,10 @@ The client supports multiple authenticated sessions with `-pool-size`; SOCKS req
 
 Run another proxy client with a different `-client-id` to use the same server concurrently. The demo server accepts any client ID authenticated by the demo secret; production deployments should use a per-client key provider.
 
+`p2proxy_ws_signaling` is the WebSocket-signaling variant for the Cloudflare
+Worker endpoint. See [`p2proxy_ws_signaling/README.md`](p2proxy_ws_signaling/README.md)
+for the `-signaling` endpoint format and commands.
+
 ## P2P DNS
 
 `p2pdns` forwards encrypted DNS packets over one authenticated P2P connection. Each connection is already bound to one client, so no destination address is carried in the P2P API. The server uses the configured upstream DNS service and the client exposes a local UDP port for ordinary DNS clients. Only the `raw_udp` transport is accepted; DNS packet boundaries are framed by the example itself.
@@ -68,7 +72,11 @@ $ sftp -P 2222 root@127.0.0.1
 
 SSH TCP forwarding is enabled by default and can be used with `ssh -L` or `ssh -D`. Disable it on the server with `-allow-tcp-forwarding=false`.
 
-The default transport is QUIC. The server advertises QUIC, KCP, and SCTP. One Telekit connection carries multiple SSH, SFTP, and forwarding sessions through the built-in stream multiplexer.
+The default transport is QUIC. The server advertises QUIC, HTTP/3, KCP, and SCTP. One Telekit connection carries multiple SSH, SFTP, and forwarding sessions through the built-in stream multiplexer.
+
+`p2pssh_ws_signaling` is the WebSocket-signaling variant for the Cloudflare
+Worker endpoint. See [`p2pssh_ws_signaling/README.md`](p2pssh_ws_signaling/README.md)
+for the `-signaling` endpoint format.
 
 PTY-backed shell sessions are compiled only on non-Windows platforms. Windows server builds reject PTY and shell requests but continue to provide SFTP and SSH TCP forwarding.
 
@@ -103,9 +111,9 @@ The examples hash `-secret` with SHA-256 to obtain a PSK. Production systems sho
 
 ## Resource controls
 
-The examples expose MQTT queue limits. `netconn` and `p2pssh` also expose generic frame and receive-buffer limits. The `p2proxy` and `p2pssh` client `-transport` value can be `quic`, `kcp`, or `sctp`; their servers advertise all three. `p2pdns` accepts only `raw_udp`.
+The examples expose MQTT queue limits. `netconn` and `p2pssh` also expose generic frame and receive-buffer limits. The `p2proxy` and `p2pssh` client `-transport` value can be `quic`, `http3`, `kcp`, or `sctp`; their servers advertise all four. `p2pdns` accepts only `raw_udp`.
 
-Library users can pass `transports.ITransport` values directly; leaving the server transport unset defaults to raw UDP. SCTP/DataChannel tuning stays in the transport implementation.
+Library users can pass `transports.ITransport` values directly; leaving the server transport unset defaults to reliable QUIC. SCTP/DataChannel tuning stays in the transport implementation.
 
 Servers also expose connection, pending-handshake, global-buffer, handshake-timeout, and ClientHello rate limits. Run a program with `-h` for the complete list. `-compression` must match on both peers.
 

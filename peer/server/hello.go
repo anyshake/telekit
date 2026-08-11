@@ -65,7 +65,7 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid timestamp from %s: %w", header.SourceId, err)
 		}
-		if delta := time.Since(timestamp); delta > s.options.ClockSkew || delta < -s.options.ClockSkew {
+		if delta := s.options.GetTimeFunc().Sub(timestamp); delta > s.options.ClockSkew || delta < -s.options.ClockSkew {
 			return nil, fmt.Errorf("timestamp from %s is outside allowed clock skew", header.SourceId)
 		}
 		if hasExisting {

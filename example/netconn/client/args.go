@@ -49,7 +49,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.serverPubKey, "server-public-key", demoServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.StringVar(&args.serverPubKey, "server-pub-key", demoServerPublicKey, "alias for -server-public-key")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "connection timeout")
-	flag.StringVar(&args.transport, "transport", "quic", "data transport selected after ICE (quic, kcp, sctp, or rawudp)")
+	flag.StringVar(&args.transport, "transport", "quic", "data transport selected after ICE (quic, http3, kcp, sctp, or rawudp)")
 	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.recvBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data")

@@ -207,10 +207,9 @@ func (s *Session) handleFrame(kind byte, id uint32, payload []byte) {
 		}
 	case frameData:
 		if stream := s.getStream(id); stream != nil {
-			select {
-			case stream.incoming <- payload:
-			case <-stream.closed:
-			case <-s.done:
+			if !stream.enqueue(payload) {
+				stream.markClosed()
+				_ = s.send(frameClose, id, nil)
 			}
 		}
 	case frameClose:

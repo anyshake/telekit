@@ -135,6 +135,27 @@ func (rb *RecvBuffer) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Reset discards buffered data while keeping the receive buffer open. It is
+// used when a client replaces a failed transport with a newly negotiated one.
+func (rb *RecvBuffer) Reset() {
+	rb.cond.L.Lock()
+	defer rb.cond.L.Unlock()
+	if rb.closed {
+		return
+	}
+	buffered := rb.buf.Len()
+	rb.buf = bytes.Buffer{}
+	rb.budget.Release(buffered)
+	rb.cond.Broadcast()
+}
+
+func (rb *RecvBuffer) IsClosed() bool {
+	rb.cond.L.Lock()
+	closed := rb.closed
+	rb.cond.L.Unlock()
+	return closed
+}
+
 func (rb *RecvBuffer) SetDeadline(deadline time.Time) {
 	rb.cond.L.Lock()
 	rb.deadline = deadline

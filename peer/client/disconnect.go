@@ -6,6 +6,13 @@ import (
 )
 
 func (c *Client) Disconnect() error {
+	return c.disconnect(true, true)
+}
+
+func (c *Client) disconnect(cancelReconnect, closeBuffer bool) error {
+	if cancelReconnect {
+		c.reconnectGeneration.Add(1)
+	}
 	if c.isConnected() {
 		// KCP and SCTP do not reliably propagate a local socket close through
 		// every ICE path. Tell the server which authenticated session to remove
@@ -13,7 +20,11 @@ func (c *Client) Disconnect() error {
 		_ = c.publishDisconnect()
 	}
 	c.setIsConnected(false)
-	c.recvBuf.Load().Close()
+	if closeBuffer {
+		c.recvBuf.Load().Close()
+	} else {
+		c.recvBuf.Load().Reset()
+	}
 
 	c.stateMu.Lock()
 	transportConn := c.transportConn

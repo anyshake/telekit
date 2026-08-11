@@ -35,6 +35,10 @@ func (c *Client) Connect() error {
 }
 
 func (c *Client) ConnectWithContext(ctx context.Context) error {
+	return c.connectWithContext(ctx, false)
+}
+
+func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer bool) error {
 	c.mu.Lock()
 	if c.connected || c.connecting {
 		c.mu.Unlock()
@@ -59,10 +63,15 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			_ = c.Disconnect()
+			_ = c.disconnect(false, !preserveReceiveBuffer)
 		}
 	}()
-	c.recvBuf.Store(peer.NewRecvBufferWithLimit(c.options.ReceiveBufferSize, nil))
+	buffer := c.recvBuf.Load()
+	if buffer == nil || buffer.IsClosed() {
+		c.recvBuf.Store(peer.NewRecvBufferWithLimit(c.options.ReceiveBufferSize, nil))
+	} else {
+		buffer.Reset()
+	}
 
 	attempt, err := c.buildClientHello(codec)
 	if err != nil {
@@ -193,14 +202,16 @@ func (c *Client) ConnectWithContext(ctx context.Context) error {
 	}
 	c.setPhysicalAddrs(iceConn.LocalAddr(), iceConn.RemoteAddr())
 	selected := c.options.Transport
-	dataConn, err := selected.Dial(ctx, transports.ICEEndpoint(iceConn, endpointLocal, endpointRemote))
+	_, transportKey := c.codec.GetSecret()
+	endpoint := transports.ICEEndpoint(iceConn, endpointLocal, endpointRemote, transportKey)
+	dataConn, err := selected.Dial(ctx, endpoint)
 	if err != nil {
 		_ = iceConn.Close()
 		return err
 	}
 	c.setTransportConn(dataConn)
-	c.lastTransportRead.Store(time.Now().UnixNano())
-	go c.readTransport(dataConn, selected.Name() == "raw_udp")
+	c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
+	go c.readTransport(dataConn, transportPacketMode(selected))
 	go c.monitorTransport(dataConn)
 	c.setIsConnected(true)
 	succeeded = true
@@ -239,11 +250,12 @@ func (c *Client) readTransport(conn net.Conn, packetMode bool) {
 	}
 
 	var header [8]byte
+	var frame []byte
 	for {
 		if _, err := io.ReadFull(conn, header[:]); err != nil {
 			break
 		}
-		c.lastTransportRead.Store(time.Now().UnixNano())
+		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
 		length := binary.BigEndian.Uint64(header[:])
 		if length == 0 {
 			if err := c.sendHeartbeat(); err != nil {
@@ -254,7 +266,11 @@ func (c *Client) readTransport(conn net.Conn, packetMode bool) {
 		if length > uint64(c.options.MaxFrameSize) {
 			break
 		}
-		frame := make([]byte, length)
+		if cap(frame) < int(length) {
+			frame = make([]byte, length)
+		} else {
+			frame = frame[:length]
+		}
 		if _, err := io.ReadFull(conn, frame); err != nil {
 			break
 		}
@@ -276,7 +292,7 @@ func (c *Client) readRawTransport(conn net.Conn) {
 		if err != nil {
 			break
 		}
-		c.lastTransportRead.Store(time.Now().UnixNano())
+		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
 		if n < 8 {
 			break
 		}
@@ -312,7 +328,7 @@ func (c *Client) monitorTransport(conn net.Conn) {
 			return
 		}
 		lastRead := time.Unix(0, c.lastTransportRead.Load())
-		if time.Since(lastRead) >= transportKeepaliveTimeout {
+		if c.options.GetTimeFunc().Sub(lastRead) >= transportKeepaliveTimeout {
 			_ = c.finishTransport(conn)
 			return
 		}
@@ -321,4 +337,17 @@ func (c *Client) monitorTransport(conn net.Conn) {
 			return
 		}
 	}
+}
+
+func transportPacketMode(transport transports.ITransport) bool {
+	behavior, ok := transport.(transports.PacketModeTransport)
+	return ok && behavior.PacketMode()
+}
+
+func transportMaxFrameSize(transport transports.ITransport) int {
+	behavior, ok := transport.(transports.MaxFrameSizeTransport)
+	if !ok {
+		return 0
+	}
+	return behavior.MaxFrameSize()
 }

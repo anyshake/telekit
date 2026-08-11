@@ -45,15 +45,6 @@ func WithInitialPacketSize(size uint16) Option {
 	}
 }
 
-func WithKeepAlivePeriod(period time.Duration) Option {
-	return func(t *Transport) {
-		if t.Config == nil {
-			t.Config = defaultConfig()
-		}
-		t.Config.KeepAlivePeriod = period
-	}
-}
-
 func WithMaxIdleTimeout(timeout time.Duration) Option {
 	return func(t *Transport) {
 		if t.Config == nil {

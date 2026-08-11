@@ -212,18 +212,23 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 		_ = conn.Close()
 		return
 	}
+	conn.stateMu.Lock()
+	conn.transportMaxFrameSize = transportMaxFrameSize(selected)
+	conn.stateMu.Unlock()
 	endpointLocal := peer.Addr{RoomID: conn.roomId, PeerID: conn.serverId}
 	endpointRemote := peer.Addr{RoomID: conn.roomId, PeerID: conn.sourceId}
 	conn.setPhysicalAddrs(iceConn.LocalAddr(), iceConn.RemoteAddr())
-	dataConn, err := selected.Accept(ctx, transportcore.ICEEndpoint(iceConn, endpointLocal, endpointRemote))
+	_, transportKey := conn.codec.GetSecret()
+	endpoint := transportcore.ICEEndpoint(iceConn, endpointLocal, endpointRemote, transportKey)
+	dataConn, err := selected.Accept(ctx, endpoint)
 	if err != nil {
 		_ = iceConn.Close()
 		_ = conn.Close()
 		return
 	}
-	conn.lastTransportRead.Store(time.Now().UnixNano())
+	conn.lastTransportRead.Store(s.options.GetTimeFunc().UnixNano())
 	conn.setTransportConn(dataConn)
-	go conn.readTransport(dataConn, selected.Name() == "raw_udp")
+	go conn.readTransport(dataConn, transportPacketMode(selected))
 	conn.markEstablished()
 	go monitorTransport(conn)
 	select {
@@ -246,7 +251,7 @@ func monitorTransport(conn *Connection) {
 			return
 		}
 		lastRead := time.Unix(0, conn.lastTransportRead.Load())
-		if time.Since(lastRead) >= transportKeepaliveTimeout {
+		if conn.owner.options.GetTimeFunc().Sub(lastRead) >= transportKeepaliveTimeout {
 			_ = conn.Close()
 			return
 		}

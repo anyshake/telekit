@@ -25,12 +25,13 @@ const (
 type Options struct {
 	// ICEAgentOptions are passed to the Pion ICE agent created for each connection.
 	ICEAgentOptions []ice.AgentOption
-	// TimeFunc returns the current time used to generate handshake timestamps.
-	TimeFunc func() time.Time
+	// GetTimeFunc returns the current time used by handshake, replay, keepalive,
+	// and deadline checks. If nil, time.Now is used.
+	GetTimeFunc func() time.Time
 	// Timeout is the maximum time to wait for a connection to be established.
 	Timeout time.Duration
 	// Transport selects the data transport negotiated after ICE. Nil defaults to
-	// the raw UDP transport.
+	// the reliable QUIC transport.
 	Transport transports.ITransport
 	// UseCompression enables zstd compression before encryption.
 	UseCompression bool
@@ -44,7 +45,7 @@ type Options struct {
 	MaxPendingICEBytes int
 	// EncryptionAAD is additional authenticated data included in each frame.
 	EncryptionAAD []byte
-	// EncryptionType selects the frame cipher. Empty uses XChaCha20-Poly1305.
+	// EncryptionType selects the frame cipher. Empty uses ChaCha20-Poly1305.
 	EncryptionType string
 	// OnClientHello is called after ClientHello is sent.
 	OnClientHello func(*Client)
@@ -83,17 +84,19 @@ type Client struct {
 	pendingICE      []webrtc.ICECandidateInit
 	pendingICEBytes int
 
-	transportConn     net.Conn
-	lastTransportRead atomic.Int64
-	iceAgent          *ice.Agent
-	localAddr         peer.Addr
-	remoteAddr        peer.Addr
-	stateMu           sync.RWMutex
+	transportConn       net.Conn
+	lastTransportRead   atomic.Int64
+	reconnectGeneration atomic.Uint64
+	iceAgent            *ice.Agent
+	localAddr           peer.Addr
+	remoteAddr          peer.Addr
+	stateMu             sync.RWMutex
 
 	writeMu sync.Mutex
 
 	// recvBuf is the TCP-like receive buffer. Use Read() to consume data.
-	// Replaced with a fresh buffer on each ConnectWithContext call.
+	// Reused across automatic transport reconnects and replaced after an
+	// explicit Disconnect.
 	recvBuf atomic.Pointer[peer.RecvBuffer]
 
 	mu            sync.RWMutex

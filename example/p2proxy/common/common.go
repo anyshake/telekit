@@ -30,6 +30,18 @@ func ConnectMQTT(endpoint, baseTopic, role string, queueMessages, queueBytes int
 		mqtt.WithKeepAlive(30*time.Second),
 		mqtt.WithPingTimeout(10*time.Second),
 		mqtt.WithDispatchQueueLimits(queueMessages, queueBytes),
+		mqtt.WithOnConnect(func() {
+			log.Printf("signaling: MQTT connected; subscriptions restored role=%q", role)
+		}),
+		mqtt.WithReconnectingHandler(func() {
+			log.Printf("signaling: MQTT reconnecting role=%q", role)
+		}),
+		mqtt.WithConnectionLostHandler(func(err error) {
+			log.Printf("signaling: MQTT connection lost role=%q: %v", role, err)
+		}),
+		mqtt.WithSubscriptionErrorHandler(func(topic string, err error) {
+			log.Printf("signaling: MQTT subscription failed role=%q topic=%q: %v", role, topic, err)
+		}),
 		mqtt.WithDispatchOverflowHandler(func(topic string) {
 			log.Printf("signaling: MQTT queue full; dropped topic=%q", topic)
 		}),

@@ -65,7 +65,17 @@ func (c *Connection) writeTimedOut() bool {
 	c.deadlineMu.RLock()
 	deadline := c.writeDeadline
 	c.deadlineMu.RUnlock()
-	return !deadline.IsZero() && time.Now().After(deadline)
+	return !deadline.IsZero() && c.owner.options.GetTimeFunc().After(deadline)
+}
+
+func (c *Connection) maxFrameSize() int {
+	c.stateMu.RLock()
+	transportMaxFrameSize := c.transportMaxFrameSize
+	c.stateMu.RUnlock()
+	if transportMaxFrameSize > 0 && c.owner.options.MaxFrameSize > transportMaxFrameSize {
+		return transportMaxFrameSize
+	}
+	return c.owner.options.MaxFrameSize
 }
 
 func (c *Connection) setTransportConn(conn net.Conn) {
@@ -88,13 +98,14 @@ func (c *Connection) readTransport(conn net.Conn, packetMode bool) {
 	}
 
 	var header [8]byte
+	var frame []byte
 	for {
 		if _, err := io.ReadFull(conn, header[:]); err != nil {
 			break
 		}
 		length := binary.BigEndian.Uint64(header[:])
 		if length == 0 {
-			c.lastTransportRead.Store(time.Now().UnixNano())
+			c.lastTransportRead.Store(c.owner.options.GetTimeFunc().UnixNano())
 			if err := c.sendHeartbeat(); err != nil {
 				break
 			}
@@ -106,12 +117,16 @@ func (c *Connection) readTransport(conn net.Conn, packetMode bool) {
 		if !c.owner.bufferBudget.Reserve(int(length)) {
 			break
 		}
-		frame := make([]byte, length)
+		if cap(frame) < int(length) {
+			frame = make([]byte, length)
+		} else {
+			frame = frame[:length]
+		}
 		if _, err := io.ReadFull(conn, frame); err != nil {
 			c.owner.bufferBudget.Release(int(length))
 			break
 		}
-		c.lastTransportRead.Store(time.Now().UnixNano())
+		c.lastTransportRead.Store(c.owner.options.GetTimeFunc().UnixNano())
 		raw, err := c.codec.DecodeWithDecryptionLimit(frame, c.owner.options.MaxFrameSize)
 		c.owner.bufferBudget.Release(int(length))
 		if err != nil || len(raw) > c.owner.options.MaxFrameSize {
@@ -139,7 +154,7 @@ func (c *Connection) readRawTransport(conn net.Conn) {
 			if n != 8 {
 				break
 			}
-			c.lastTransportRead.Store(time.Now().UnixNano())
+			c.lastTransportRead.Store(c.owner.options.GetTimeFunc().UnixNano())
 			if err := c.sendHeartbeat(); err != nil {
 				break
 			}
@@ -148,7 +163,7 @@ func (c *Connection) readRawTransport(conn net.Conn) {
 		if length > uint64(c.owner.options.MaxFrameSize) || int(length) != n-8 {
 			break
 		}
-		c.lastTransportRead.Store(time.Now().UnixNano())
+		c.lastTransportRead.Store(c.owner.options.GetTimeFunc().UnixNano())
 		if !c.owner.bufferBudget.Reserve(int(length)) {
 			break
 		}
