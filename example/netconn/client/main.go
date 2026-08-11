@@ -72,7 +72,6 @@ func main() {
 		&client.Options{
 			Timeout:            args.timeout,
 			Transport:          selectedTransport,
-			UseCompression:     args.compression,
 			MaxFrameSize:       args.maxFrameBytes,
 			ReceiveBufferSize:  args.recvBufferBytes,
 			OnClientHello:      handleClientHello,

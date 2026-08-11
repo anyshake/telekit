@@ -5,14 +5,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"sync/atomic"
 )
 
 const nonceCounterSize = 8
 
 // nonceSource avoids a crypto/rand syscall for every encrypted frame. A fresh
-// random prefix is generated once per key, and the counter makes every nonce
-// unique for the lifetime of that key.
+// random prefix is generated once per encrypting key instance, and the counter
+// makes every nonce unique for that instance's lifetime.
 type nonceSource struct {
 	prefix  []byte
 	counter atomic.Uint64
@@ -33,9 +34,16 @@ func (s *nonceSource) next(dst []byte) error {
 	if len(dst) != len(s.prefix)+nonceCounterSize {
 		return errors.New("invalid nonce size")
 	}
-	counter := s.counter.Add(1)
-	if counter == 0 {
-		return errors.New("nonce counter exhausted")
+	var counter uint64
+	for {
+		current := s.counter.Load()
+		if current == math.MaxUint64 {
+			return errors.New("nonce counter exhausted")
+		}
+		counter = current + 1
+		if s.counter.CompareAndSwap(current, counter) {
+			break
+		}
 	}
 	copy(dst, s.prefix)
 	binary.BigEndian.PutUint64(dst[len(s.prefix):], counter)

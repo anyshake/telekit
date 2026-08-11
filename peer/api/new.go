@@ -119,13 +119,12 @@ func WithTURNServer(urls ...string) Option {
 // WithWebSocketRelayServer configures a WebSocket relay as an additional ICE
 // relay candidate source. Direct host/srflx candidates and TURN remain
 // enabled unless the caller overrides candidate types through ICE options.
+// Token may be empty; the relay server's Authorize policy decides whether it
+// is required.
 func WithWebSocketRelayServer(relayBaseURL, serverID, token string) Option {
 	return func(api *API) error {
 		if serverID == "" {
 			return errors.New("websocket relay server ID is empty")
-		}
-		if token == "" {
-			return errors.New("websocket relay token is empty")
 		}
 		endpoint, err := relayws.EndpointURL(relayBaseURL, serverID)
 		if err != nil {

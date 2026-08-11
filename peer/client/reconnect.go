@@ -24,7 +24,7 @@ func (c *Client) ReconnectWithContext(ctx context.Context) error {
 // is no longer usable. The failed ICE agent is not reused.
 func (c *Client) reconnectAfterTransportFailure(generation uint64) {
 	for {
-		if c.reconnectGeneration.Load() != generation || c.isConnected() {
+		if c.manualDisconnect.Load() || c.reconnectGeneration.Load() != generation || c.isConnected() {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), c.options.Timeout)
@@ -36,7 +36,7 @@ func (c *Client) reconnectAfterTransportFailure(generation uint64) {
 			}
 			return
 		}
-		if c.reconnectGeneration.Load() != generation {
+		if c.manualDisconnect.Load() || c.reconnectGeneration.Load() != generation {
 			return
 		}
 		if c.options.OnConnectionFailed != nil {

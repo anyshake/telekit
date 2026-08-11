@@ -177,7 +177,6 @@ func dialTelekitSession(
 		api,
 		&client.Options{
 			Timeout:            cfg.timeout,
-			UseCompression:     cfg.compression,
 			MaxFrameSize:       cfg.maxFrameBytes,
 			ReceiveBufferSize:  cfg.receiveBufferBytes,
 			MaxPendingICE:      cfg.maxPendingICE,

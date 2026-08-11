@@ -73,7 +73,6 @@ func main() {
 		secret:             args.secret,
 		serverPublicKey:    serverPublicKey,
 		timeout:            args.timeout,
-		compression:        args.compression,
 		maxFrameBytes:      args.maxFrameBytes,
 		receiveBufferBytes: args.receiveBufferBytes,
 		maxPendingICE:      args.maxPendingICE,

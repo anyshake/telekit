@@ -33,15 +33,13 @@ type Options struct {
 	// Transport selects the data transport negotiated after ICE. Nil defaults to
 	// the reliable QUIC transport.
 	Transport transports.ITransport
-	// UseCompression enables zstd compression before encryption.
-	UseCompression bool
 	// MaxFrameSize is the maximum decoded encrypted transport frame size.
 	MaxFrameSize int
 	// ReceiveBufferSize is the maximum unread application data retained by Read.
 	ReceiveBufferSize int
-	// MaxPendingICE limits the number of ICE candidates buffered per connection.
+	// MaxPendingICE limits the number of candidates in one ICE description.
 	MaxPendingICE int
-	// MaxPendingICEBytes limits the bytes used by buffered ICE candidates.
+	// MaxPendingICEBytes limits credentials and candidate bytes in one ICE description.
 	MaxPendingICEBytes int
 	// EncryptionAAD is additional authenticated data included in each frame.
 	EncryptionAAD []byte
@@ -74,7 +72,7 @@ type Client struct {
 	psk      peer.PreSharedKey
 	api      *api.API
 	options  *Options
-	codec    *peer.Codec
+	codec    *peer.SignalingChannel
 
 	signalMu   sync.Mutex
 	signalSend atomic.Uint64
@@ -85,8 +83,10 @@ type Client struct {
 	pendingICEBytes int
 
 	transportConn       net.Conn
+	dataChannel         *peer.DataChannel
 	lastTransportRead   atomic.Int64
 	reconnectGeneration atomic.Uint64
+	manualDisconnect    atomic.Bool
 	iceAgent            *ice.Agent
 	localAddr           peer.Addr
 	remoteAddr          peer.Addr

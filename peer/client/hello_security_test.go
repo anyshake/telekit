@@ -35,29 +35,25 @@ func TestServerHelloRejectsReplayAndForgedServer(t *testing.T) {
 			EncryptionAAD:  []byte("test"),
 		},
 	}
-	handshakeCodec, err := peer.NewCodec(encryption.XCHACHA20_POLY1305, masterKey, c.options.EncryptionAAD, false)
-	if err != nil {
-		t.Fatal(err)
-	}
 	currentNonce := bytes.Repeat([]byte{1}, peer.HandshakeNonceSize)
 	clientPrivateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	attempt := &clientHandshake{nonce: currentNonce, privateKey: clientPrivateKey, publicKey: clientPrivateKey.PublicKey().Bytes()}
-	validHello := makeServerHello(t, handshakeCodec, serverPrivateKey, serverPublicKey, c.api.RoomId, c.clientId, currentNonce, attempt.publicKey)
-	if _, err := c.handleServerHello(handshakeCodec, validHello, attempt); err != nil {
+	validHello := makeServerHello(t, masterKey, c.options.EncryptionType, c.options.EncryptionAAD, serverPrivateKey, serverPublicKey, c.api.RoomId, c.clientId, currentNonce, attempt.publicKey, nil)
+	if _, err := c.handleServerHello(validHello, attempt); err != nil {
 		t.Fatalf("valid server hello rejected: %v", err)
 	}
 
 	oldNonce := bytes.Repeat([]byte{2}, peer.HandshakeNonceSize)
-	replayedHello := makeServerHello(t, handshakeCodec, serverPrivateKey, serverPublicKey, c.api.RoomId, c.clientId, oldNonce, attempt.publicKey)
-	if _, err := c.handleServerHello(handshakeCodec, replayedHello, attempt); err == nil {
+	replayedHello := makeServerHello(t, masterKey, c.options.EncryptionType, c.options.EncryptionAAD, serverPrivateKey, serverPublicKey, c.api.RoomId, c.clientId, oldNonce, attempt.publicKey, nil)
+	if _, err := c.handleServerHello(replayedHello, attempt); err == nil {
 		t.Fatal("server hello from an older client nonce was accepted")
 	}
 
-	forgedHello := makeServerHello(t, handshakeCodec, roguePrivateKey, serverPublicKey, c.api.RoomId, c.clientId, currentNonce, attempt.publicKey)
-	if _, err := c.handleServerHello(handshakeCodec, forgedHello, attempt); err == nil {
+	forgedHello := makeServerHello(t, masterKey, c.options.EncryptionType, c.options.EncryptionAAD, roguePrivateKey, serverPublicKey, c.api.RoomId, c.clientId, currentNonce, attempt.publicKey, nil)
+	if _, err := c.handleServerHello(forgedHello, attempt); err == nil {
 		t.Fatal("server hello signed by an unpinned key was accepted")
 	}
 
@@ -70,19 +66,31 @@ func TestServerHelloRejectsReplayAndForgedServer(t *testing.T) {
 		privateKey: attackerPrivateKey,
 		publicKey:  attackerPrivateKey.PublicKey().Bytes(),
 	}
-	if _, err := c.handleServerHello(handshakeCodec, validHello, attackerAttempt); err == nil {
+	if _, err := c.handleServerHello(validHello, attackerAttempt); err == nil {
 		t.Fatal("PSK holder adopted a server hello bound to another client's ephemeral key")
+	}
+
+	mismatchedHeaderNonce := makeServerHello(
+		t, masterKey, c.options.EncryptionType, c.options.EncryptionAAD,
+		serverPrivateKey, serverPublicKey, c.api.RoomId, c.clientId,
+		currentNonce, attempt.publicKey, bytes.Repeat([]byte{5}, peer.HandshakeNonceSize),
+	)
+	if _, err := c.handleServerHello(mismatchedHeaderNonce, attempt); err == nil {
+		t.Fatal("server hello accepted a clear nonce that differed from its authenticated payload")
 	}
 }
 
 func makeServerHello(
 	t *testing.T,
-	handshakeCodec *peer.Codec,
+	masterKey []byte,
+	encryptionType string,
+	aad []byte,
 	privateKey ed25519.PrivateKey,
 	pinnedPublicKey ed25519.PublicKey,
 	roomID, clientID string,
 	clientNonce []byte,
 	clientEphemeralKey []byte,
+	headerNonce []byte,
 ) []byte {
 	t.Helper()
 	serverID, err := peer.ServerIDFromPublicKey(pinnedPublicKey)
@@ -90,6 +98,9 @@ func makeServerHello(
 		t.Fatal(err)
 	}
 	serverNonce := bytes.Repeat([]byte{3}, peer.HandshakeNonceSize)
+	if headerNonce == nil {
+		headerNonce = serverNonce
+	}
 	salt := bytes.Repeat([]byte{4}, peer.HandshakeNonceSize)
 	serverPrivateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -100,11 +111,20 @@ func makeServerHello(
 	if err != nil {
 		t.Fatal(err)
 	}
+	handshakeKey, err := peer.DeriveServerHelloKey(masterKey, roomID, clientID, serverID, clientNonce, headerNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handshakeCodec, err := peer.NewCodec(encryptionType, handshakeKey, aad)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := handshakeCodec.EncodeMessage(&peer.Message{
 		Header: &peer.Header{
-			Type:     peer.MessageTypeServerHello,
-			SourceId: serverID,
-			TargetId: clientID,
+			Type:           peer.MessageTypeServerHello,
+			SourceId:       serverID,
+			TargetId:       clientID,
+			HandshakeNonce: headerNonce,
 		},
 		Payload: &peer.Payload{
 			SessionSalt:        salt,
@@ -114,7 +134,6 @@ func makeServerHello(
 			ServerEphemeralKey: serverEphemeralKey,
 			Signature:          signature,
 		},
-		Encrypt: true,
 	})
 	if err != nil {
 		t.Fatal(err)

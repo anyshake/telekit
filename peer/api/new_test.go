@@ -29,3 +29,11 @@ func TestParseICEURIWithTURNLegacyForm(t *testing.T) {
 	require.Empty(t, uri.Password)
 	require.Equal(t, stun.ProtoTypeUDP, uri.Proto)
 }
+
+func TestWebSocketRelayTokenIsOptional(t *testing.T) {
+	api := &API{}
+	err := WithWebSocketRelayServer("wss://relay.example.org", "server", "")(api)
+	require.NoError(t, err)
+	require.NotNil(t, api.webSocketRelay)
+	require.Empty(t, api.webSocketRelay.Token)
+}

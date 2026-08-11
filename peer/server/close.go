@@ -3,29 +3,29 @@ package server
 import "github.com/anyshake/telekit/peer"
 
 func (c *Connection) Close() error {
+	c.closed.Store(true)
 	wasEstablished := false
 	c.closeOnce.Do(func() {
 		wasEstablished = c.established.Swap(false)
-		c.recvBuf.Close()
+		if c.recvBuf != nil {
+			c.recvBuf.Close()
+		}
 		if c.owner != nil {
-			if current, ok := c.owner.connections.Get(c.sourceId); ok && current == c {
-				c.owner.connections.Del(c.sourceId)
-			}
+			c.removeCurrent()
 			c.releaseLease()
 		}
-		transportConn := c.transportConnValue()
-		if transportConn != nil {
-			if c.closeErr == nil {
-				c.closeErr = transportConn.Close()
-			}
-			c.setTransportConn(nil)
-		}
 		c.stateMu.Lock()
+		transportConn := c.transportConn
+		c.transportConn = nil
+		c.dataChannel = nil
 		agent := c.iceAgent
 		c.iceAgent = nil
 		c.localAddr = peer.Addr{}
 		c.remoteAddr = peer.Addr{}
 		c.stateMu.Unlock()
+		if transportConn != nil {
+			c.closeErr = transportConn.Close()
+		}
 		if agent != nil {
 			if err := agent.Close(); c.closeErr == nil {
 				c.closeErr = err
@@ -53,7 +53,9 @@ func (s *Server) Close() error {
 	for _, conn := range s.connections.Iterator() {
 		_ = conn.Close()
 	}
+	s.connectionsMu.Lock()
 	s.connections.Clear()
+	s.connectionsMu.Unlock()
 	if s.roomLeaseKey != "" {
 		roomOwners.CompareAndDelete(s.roomLeaseKey, s)
 		s.roomLeaseKey = ""

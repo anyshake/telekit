@@ -2,11 +2,9 @@ package main
 
 import (
 	"flag"
-	"log"
 	"time"
 
 	"github.com/anyshake/telekit/example/p2pssh/common"
-	"github.com/anyshake/telekit/utils/compression"
 )
 
 type arguments struct {
@@ -19,7 +17,6 @@ type arguments struct {
 	username             string
 	password             string
 	shell                string
-	compression          bool
 	maxFrameBytes        int
 	receiveBufferBytes   int
 	maxBufferedBytes     int64
@@ -47,7 +44,6 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.username, "username", "root", "login username for SSH server")
 	flag.StringVar(&args.password, "password", "passw0rd", "login password for SSH server")
 	flag.StringVar(&args.shell, "shell", "/bin/sh", "shell to execute for SSH sessions (*nix only)")
-	flag.BoolVar(&args.compression, "compression", true, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data per connection")
 	flag.Int64Var(&args.maxBufferedBytes, "max-buffered-bytes", 256<<20, "server-wide reassembly, receive, ICE, and callback budget")
@@ -63,11 +59,6 @@ func parseCliArguments() *arguments {
 	flag.IntVar(&args.queueMessages, "mqtt-queue-messages", 1024, "maximum queued MQTT signaling messages")
 	flag.IntVar(&args.queueBytes, "mqtt-queue-bytes", 16<<20, "maximum queued MQTT signaling bytes")
 	flag.Parse()
-
-	if args.compression && args.maxFrameBytes > compression.MaxDecodedSize {
-		log.Printf("compression enabled; capping max-frame-bytes from %d to %d", args.maxFrameBytes, compression.MaxDecodedSize)
-		args.maxFrameBytes = compression.MaxDecodedSize
-	}
 
 	return &args
 }

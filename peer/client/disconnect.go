@@ -6,6 +6,7 @@ import (
 )
 
 func (c *Client) Disconnect() error {
+	c.manualDisconnect.Store(true)
 	return c.disconnect(true, true)
 }
 
@@ -29,6 +30,9 @@ func (c *Client) disconnect(cancelReconnect, closeBuffer bool) error {
 	c.stateMu.Lock()
 	transportConn := c.transportConn
 	c.transportConn = nil
+	c.dataChannel = nil
+	c.codec = nil
+	c.serverId = ""
 	agent := c.iceAgent
 	c.iceAgent = nil
 	c.localAddr = peer.Addr{}

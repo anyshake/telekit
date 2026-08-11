@@ -13,7 +13,6 @@ type arguments struct {
 	roomId               string
 	preSharedKey         string
 	identitySeed         string
-	compression          bool
 	maxFrameBytes        int
 	receiveBufferBytes   int
 	maxBufferedBytes     int64
@@ -33,7 +32,6 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.roomId, "room", "example-netconn", "room ID")
 	flag.StringVar(&args.preSharedKey, "secret", "change@me", "pre-shared passphrase accepted for demo clients")
 	flag.StringVar(&args.identitySeed, "identity-seed", demoServerIdentitySeed, "Ed25519 server identity seed (hex)")
-	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression before encryption")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferBytes, "receive-buffer-bytes", 8<<20, "maximum unread stream data per connection")
 	flag.Int64Var(&args.maxBufferedBytes, "max-buffered-bytes", 256<<20, "server-wide reassembly and receive budget")

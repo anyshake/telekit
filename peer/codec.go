@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 	"github.com/samber/lo"
 )
@@ -39,7 +38,6 @@ type Codec struct {
 
 	encryptionKit  encryption.IEncryption
 	additionalData []byte
-	useCompress    bool
 	dataAAD        []byte
 	headerAAD      []byte
 }
@@ -61,7 +59,7 @@ func createEncryptKit(encryptionType string, secret []byte) (encryption.IEncrypt
 	}
 }
 
-func NewCodec(encryptionType string, secret, additionalData []byte, useCompress bool) (*Codec, error) {
+func NewCodec(encryptionType string, secret, additionalData []byte) (*Codec, error) {
 	if len(additionalData) > 64 {
 		return nil, fmt.Errorf("additional data is too long: %d, maximum is 64", len(additionalData))
 	}
@@ -74,23 +72,26 @@ func NewCodec(encryptionType string, secret, additionalData []byte, useCompress 
 	codec := &Codec{
 		encryptionKit:  encryptionKit,
 		additionalData: append([]byte(nil), additionalData...),
-		useCompress:    useCompress,
 		secret:         append([]byte(nil), secret...),
 		typ:            encryptionType,
 	}
-	codec.dataAAD = codec.buildAdditionalData(codec.additionalData, useCompress, aadDomainData, nil)
-	codec.headerAAD = codec.buildAdditionalData(codec.additionalData, useCompress, aadDomainHeader, nil)
+	codec.dataAAD = codec.buildAdditionalData(codec.additionalData, aadDomainData, nil)
+	codec.headerAAD = codec.buildAdditionalData(codec.additionalData, aadDomainHeader, nil)
 	return codec, nil
 }
 
 func (e *Codec) UpdateSecret(encryptionType string, secret []byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.typ == encryptionType && bytes.Equal(e.secret, secret) {
+		// Reinitializing the same key would reset its nonce source and could
+		// repeat a nonce prefix/counter pair.
+		return nil
+	}
 	encryptionKit, err := createEncryptKit(encryptionType, secret)
 	if err != nil {
 		return err
 	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	e.encryptionKit = encryptionKit
 	e.secret = append([]byte(nil), secret...)
@@ -121,18 +122,8 @@ func (e *Codec) encodeWithEncryption(data []byte, domain byte, context []byte) (
 		return nil, fmt.Errorf("encryption kit is not set")
 	}
 
-	dataBytes := data
-	var err error
-
-	if e.useCompress {
-		dataBytes, err = compression.Compress(dataBytes)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	finalAAD := e.additionalDataFor(domain, context)
-	dataBytes, err = encryptionKit.Encrypt(dataBytes, finalAAD)
+	dataBytes, err := encryptionKit.Encrypt(data, finalAAD)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +175,7 @@ func (e *Codec) EncodeMessage(m *Message) ([]byte, error) {
 }
 
 func (e *Codec) DecodeWithDecryption(data []byte) ([]byte, error) {
-	return e.decodeWithDecryption(data, aadDomainData, nil, compression.MaxDecodedSize)
+	return e.decodeWithDecryption(data, aadDomainData, nil, maxSignalingPacketSize)
 }
 
 func (e *Codec) DecodeWithDecryptionLimit(data []byte, maxDecodedSize int) ([]byte, error) {
@@ -208,11 +199,8 @@ func (e *Codec) decodeWithDecryption(data []byte, domain byte, context []byte, m
 	if err != nil {
 		return nil, err
 	}
-	if e.useCompress {
-		dataBytes, err = compression.DecompressLimit(dataBytes, maxDecodedSize)
-		if err != nil {
-			return nil, err
-		}
+	if maxDecodedSize > 0 && len(dataBytes) > maxDecodedSize {
+		return nil, fmt.Errorf("decrypted data exceeds %d bytes", maxDecodedSize)
 	}
 
 	return dataBytes, nil
@@ -244,7 +232,7 @@ func (e *Codec) DecodeMessageHeader(data []byte) (*Header, error) {
 
 	if encryptFlag == ENCRYPT_GLOBALLY {
 		var err error
-		headerBytes, err = e.decodeWithDecryption(headerBytes, aadDomainHeader, nil, compression.MaxDecodedSize)
+		headerBytes, err = e.decodeWithDecryption(headerBytes, aadDomainHeader, nil, maxSignalingPacketSize)
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +272,7 @@ func (e *Codec) DecodeMessage(data []byte) (*Message, error) {
 
 	if isGloballyEncrypt {
 		var err error
-		headerBytes, err = e.decodeWithDecryption(headerBytes, aadDomainHeader, nil, compression.MaxDecodedSize)
+		headerBytes, err = e.decodeWithDecryption(headerBytes, aadDomainHeader, nil, maxSignalingPacketSize)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +283,7 @@ func (e *Codec) DecodeMessage(data []byte) (*Message, error) {
 		return nil, err
 	}
 
-	payloadBytes, err := e.decodeWithDecryption(dataChunks[INDEX_PAYLOAD], aadDomainPayload, headerBytes, compression.MaxDecodedSize)
+	payloadBytes, err := e.decodeWithDecryption(dataChunks[INDEX_PAYLOAD], aadDomainPayload, headerBytes, maxSignalingPacketSize)
 	if err != nil {
 		return nil, err
 	}
@@ -323,14 +311,10 @@ func validateDataChunks(dataChunks [][]byte) error {
 	return nil
 }
 
-func (e *Codec) buildAdditionalData(aad []byte, compression bool, domain byte, context []byte) []byte {
+func (e *Codec) buildAdditionalData(aad []byte, domain byte, context []byte) []byte {
 	buf := make([]byte, 0, 24+len(aad)+len(context))
-	buf = append(buf, 0x02) // protocol version
-	if compression {
-		buf = append(buf, 0x01) // compression flag
-	} else {
-		buf = append(buf, 0x00) // compression flag
-	}
+	buf = append(buf, 0x02)                // protocol version
+	buf = append(buf, 0x00)                // reserved for future use
 	buf = append(buf, domain)              // cryptographic domain
 	buf = append(buf, make([]byte, 15)...) // reserved for future use
 	buf = append(buf, uint8(len(aad)))     // length of user-defined AAD
@@ -351,5 +335,5 @@ func (e *Codec) additionalDataFor(domain byte, context []byte) []byte {
 			return e.headerAAD
 		}
 	}
-	return e.buildAdditionalData(e.additionalData, e.useCompress, domain, context)
+	return e.buildAdditionalData(e.additionalData, domain, context)
 }

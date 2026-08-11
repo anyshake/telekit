@@ -33,7 +33,7 @@ func TestDeriveSessionKeyIsScoped(t *testing.T) {
 func TestCodecSessionUpdateDoesNotOverwritePSK(t *testing.T) {
 	master := bytes.Repeat([]byte{1}, MinPreSharedKeySize)
 	want := append([]byte(nil), master...)
-	codec, err := NewCodec(encryption.XCHACHA20_POLY1305, master, []byte("test"), false)
+	codec, err := NewCodec(encryption.XCHACHA20_POLY1305, master, []byte("test"))
 	if err != nil {
 		t.Fatal(err)
 	}

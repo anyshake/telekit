@@ -18,7 +18,13 @@ var errReplayedClientHello = errors.New("client hello nonce was replayed")
 // session. A replay must not be allowed to close the currently active
 // connection.
 func (s *Server) prepareClientHello(existing *Connection, nonce, clientEphemeralKey []byte) (bool, error) {
-	if existing != nil && existing.transportConnValue() == nil && existing.selectedTransport == "" &&
+	pending := false
+	if existing != nil {
+		existing.stateMu.RLock()
+		pending = !existing.closed.Load() && existing.transportConn == nil && existing.selectedTransport == ""
+		existing.stateMu.RUnlock()
+	}
+	if pending &&
 		bytes.Equal(existing.clientNonce, nonce) && bytes.Equal(existing.clientEphemeralKey, clientEphemeralKey) {
 		// QoS transports may duplicate an authenticated hello. Re-send the
 		// same pending session without accepting a different proof.
@@ -43,6 +49,9 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 	}
 
 	if header.TargetId == "" && header.Type == peer.MessageTypeClientHello {
+		if len(header.HandshakeNonce) != peer.HandshakeNonceSize {
+			return nil, errors.New("invalid client hello nonce")
+		}
 		existing, _ := s.connections.Get(header.SourceId)
 		if !s.isClientIdValid(header.SourceId) {
 			err := fmt.Errorf("rejected connection from %s due to server restrictions", header.SourceId)
@@ -61,7 +70,11 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if err := peer.ValidateClientCredentials(header.SourceId, key); err != nil {
 			return nil, err
 		}
-		handshakeCodec, err := peer.NewCodec(s.options.EncryptionType, key, s.options.EncryptionAAD, s.options.UseCompression)
+		handshakeKey, err := peer.DeriveClientHelloKey(key, s.api.RoomId, header.SourceId, s.serverId, header.HandshakeNonce)
+		if err != nil {
+			return nil, err
+		}
+		handshakeCodec, err := peer.NewCodec(s.options.EncryptionType, handshakeKey, s.options.EncryptionAAD)
 		if err != nil {
 			return nil, err
 		}
@@ -84,6 +97,9 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 				s.options.OnNewClientReject(header.SourceId, err)
 			}
 			return nil, err
+		}
+		if !bytes.Equal(header.HandshakeNonce, nonce) {
+			return nil, errors.New("client hello nonce does not match authenticated payload")
 		}
 		timestamp, err := time.Parse(time.RFC3339Nano, string(message.Payload.Timestamp))
 		if err != nil {
@@ -130,6 +146,14 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if err != nil {
 			return nil, err
 		}
+		serverHelloKey, err := peer.DeriveServerHelloKey(key, s.api.RoomId, header.SourceId, s.serverId, nonce, serverNonce)
+		if err != nil {
+			return nil, err
+		}
+		serverHelloCodec, err := peer.NewCodec(s.options.EncryptionType, serverHelloKey, s.options.EncryptionAAD)
+		if err != nil {
+			return nil, err
+		}
 		serverPrivateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, err
@@ -154,19 +178,29 @@ func (s *Server) handleClientHello(data []byte) (*Connection, error) {
 		if err != nil {
 			return nil, err
 		}
-		codec, err := peer.NewCodec(s.options.EncryptionType, sessionKey, s.options.EncryptionAAD, s.options.UseCompression)
+		codec, err := peer.NewSignalingChannel(s.options.EncryptionType, sessionKey, s.options.EncryptionAAD, peer.DataRoleServer)
+		if err != nil {
+			return nil, err
+		}
+		dataChannel, err := peer.NewDataChannel(
+			s.options.EncryptionType,
+			sessionKey,
+			s.options.EncryptionAAD,
+			peer.DataRoleServer,
+		)
 		if err != nil {
 			return nil, err
 		}
 		conn := &Connection{
 			sourceId:           header.SourceId,
 			codec:              codec,
-			handshakeCodec:     handshakeCodec,
+			handshakeCodec:     serverHelloCodec,
 			sessionSalt:        sessionSalt,
 			clientNonce:        append([]byte(nil), nonce...),
 			serverNonce:        serverNonce,
 			clientEphemeralKey: append([]byte(nil), message.Payload.ClientEphemeralKey...),
 			serverEphemeralKey: serverPublicKey,
+			dataChannel:        dataChannel,
 			recvBuf:            peer.NewRecvBufferWithLimit(s.options.ReceiveBufferSize, s.bufferBudget),
 			serverId:           s.serverId,
 			roomId:             s.api.RoomId,
@@ -201,9 +235,10 @@ func (s *Server) sendServerHello(conn *Connection) error {
 	}
 	dataBytes, err := conn.handshakeCodec.EncodeMessage(&peer.Message{
 		Header: &peer.Header{
-			Type:     peer.MessageTypeServerHello,
-			SourceId: s.serverId,
-			TargetId: conn.sourceId,
+			Type:           peer.MessageTypeServerHello,
+			SourceId:       s.serverId,
+			TargetId:       conn.sourceId,
+			HandshakeNonce: conn.serverNonce,
 		},
 		Payload: &peer.Payload{
 			SessionSalt:        conn.sessionSalt,
@@ -214,7 +249,6 @@ func (s *Server) sendServerHello(conn *Connection) error {
 			Signature:          signature,
 			Transports:         transportNames(s.options.Transports),
 		},
-		Encrypt: true,
 	})
 	if err != nil {
 		return err

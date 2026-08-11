@@ -9,6 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
@@ -26,6 +29,73 @@ func ServerIDFromPublicKey(publicKey crypto.PublicKey) (string, error) {
 	}
 	digest := sha256.Sum256(_publicKey)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+// DeriveClientHelloKey scopes ClientHello encryption to one handshake attempt.
+// The nonce is carried in the clear header and authenticated as payload AAD.
+func DeriveClientHelloKey(
+	masterKey []byte,
+	roomID, clientID, serverID string,
+	clientNonce []byte,
+) ([]byte, error) {
+	if err := validateHandshakeKeyContext(masterKey, roomID, clientID, serverID, clientNonce); err != nil {
+		return nil, err
+	}
+	info := encodeHandshakeFields(
+		[]byte("telekit/client-hello-key/v1"),
+		[]byte(roomID),
+		[]byte(clientID),
+		[]byte(serverID),
+		clientNonce,
+		[]byte("client-to-server"),
+	)
+	return deriveHandshakeKey(masterKey, clientNonce, info)
+}
+
+// DeriveServerHelloKey scopes ServerHello encryption to one handshake attempt
+// and separates it from the ClientHello direction.
+func DeriveServerHelloKey(
+	masterKey []byte,
+	roomID, clientID, serverID string,
+	clientNonce, serverNonce []byte,
+) ([]byte, error) {
+	if err := validateHandshakeKeyContext(masterKey, roomID, clientID, serverID, clientNonce); err != nil {
+		return nil, err
+	}
+	if len(serverNonce) != HandshakeNonceSize {
+		return nil, fmt.Errorf("server nonce must be %d bytes", HandshakeNonceSize)
+	}
+	info := encodeHandshakeFields(
+		[]byte("telekit/server-hello-key/v1"),
+		[]byte(roomID),
+		[]byte(clientID),
+		[]byte(serverID),
+		clientNonce,
+		serverNonce,
+		[]byte("server-to-client"),
+	)
+	return deriveHandshakeKey(masterKey, serverNonce, info)
+}
+
+func validateHandshakeKeyContext(masterKey []byte, roomID, clientID, serverID string, clientNonce []byte) error {
+	if err := ValidateClientCredentials(clientID, masterKey); err != nil {
+		return err
+	}
+	if roomID == "" || serverID == "" {
+		return errors.New("room ID and server ID must not be empty")
+	}
+	if len(clientNonce) != HandshakeNonceSize {
+		return fmt.Errorf("client nonce must be %d bytes", HandshakeNonceSize)
+	}
+	return nil
+}
+
+func deriveHandshakeKey(masterKey, salt, info []byte) ([]byte, error) {
+	key := make([]byte, HandshakeKeySize)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, masterKey, salt, info), key); err != nil {
+		return nil, fmt.Errorf("derive handshake key: %w", err)
+	}
+	return key, nil
 }
 
 func SignServerHello(

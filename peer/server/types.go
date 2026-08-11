@@ -57,17 +57,15 @@ type Options struct {
 	EncryptionType string
 	// EncryptionAAD is additional authenticated data included in each frame.
 	EncryptionAAD []byte
-	// UseCompression enables zstd compression before encryption.
-	UseCompression bool
 	// MaxFrameSize is the maximum decoded encrypted transport frame size.
 	MaxFrameSize int
 	// ReceiveBufferSize is the maximum unread application data retained by Read.
 	ReceiveBufferSize int
 	// MaxBufferedBytes is the server-wide receive and frame-reassembly budget.
 	MaxBufferedBytes int64
-	// MaxPendingICE limits the number of ICE candidates buffered per connection.
+	// MaxPendingICE limits the number of candidates in one ICE description.
 	MaxPendingICE int
-	// MaxPendingICEBytes limits the bytes used by buffered ICE candidates.
+	// MaxPendingICEBytes limits credentials and candidate bytes in one ICE description.
 	MaxPendingICEBytes int
 	// MaxConnections limits the total number of accepted client connections.
 	MaxConnections int
@@ -103,7 +101,7 @@ type Options struct {
 
 type Connection struct {
 	sourceId           string
-	codec              *peer.Codec
+	codec              *peer.SignalingChannel
 	handshakeCodec     *peer.Codec
 	sessionSalt        []byte
 	clientNonce        []byte
@@ -112,8 +110,10 @@ type Connection struct {
 	serverEphemeralKey []byte
 
 	transportConn         net.Conn
+	dataChannel           *peer.DataChannel
 	lastTransportRead     atomic.Int64
 	established           atomic.Bool
+	closed                atomic.Bool
 	iceAgent              *ice.Agent
 	localAddr             peer.Addr
 	remoteAddr            peer.Addr
@@ -159,6 +159,7 @@ type Server struct {
 	onHandshake signaling.Subscription
 
 	connections       *haxmap.Map[string, *Connection]
+	connectionsMu     sync.Mutex
 	helloMu           sync.Mutex
 	acceptCh          chan *Connection
 	closeCh           chan struct{}

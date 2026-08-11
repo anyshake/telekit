@@ -88,3 +88,34 @@ func TestSessionKeyBindsBothPeersAndNonces(t *testing.T) {
 		t.Fatal("X25519 shared secret did not affect the session key")
 	}
 }
+
+func TestHandshakeKeysAreScopedAndDirectional(t *testing.T) {
+	master := bytes.Repeat([]byte{0x41}, MinPreSharedKeySize)
+	clientNonce := bytes.Repeat([]byte{0x42}, HandshakeNonceSize)
+	serverNonce := bytes.Repeat([]byte{0x43}, HandshakeNonceSize)
+	clientKey, err := DeriveClientHelloKey(master, "room", "client", "server", clientNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKey, err := DeriveServerHelloKey(master, "room", "client", "server", clientNonce, serverNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(clientKey, serverKey) {
+		t.Fatal("client and server hello directions derived the same key")
+	}
+	changedNonce, err := DeriveClientHelloKey(master, "room", "client", "server", bytes.Repeat([]byte{0x44}, HandshakeNonceSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(clientKey, changedNonce) {
+		t.Fatal("client hello nonce did not scope the key")
+	}
+	changedIdentity, err := DeriveClientHelloKey(master, "other-room", "client", "server", clientNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(clientKey, changedIdentity) {
+		t.Fatal("room identity did not scope the key")
+	}
+}

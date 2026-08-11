@@ -11,7 +11,6 @@ import (
 	"github.com/anyshake/telekit/peer/api"
 	"github.com/anyshake/telekit/transports"
 	transportquic "github.com/anyshake/telekit/transports/transport_quic"
-	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/time/rate"
@@ -109,9 +108,6 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		options.MaxPendingHandshakes > options.MaxConnections || options.HandshakeTimeout <= 0 ||
 		options.HelloRateLimit <= 0 || options.HelloRateBurst < 1 {
 		return nil, errors.New("invalid server resource limits")
-	}
-	if options.UseCompression && options.MaxFrameSize > compression.MaxDecodedSize {
-		return nil, errors.New("compressed frame size exceeds decompression safety limit")
 	}
 	if options.EncryptionType == "" {
 		options.EncryptionType = encryption.CHACHA20_POLY1305

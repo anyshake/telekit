@@ -68,7 +68,6 @@ func main() {
 			},
 			Timeout:            args.timeout,
 			Transport:          selectedTransport,
-			UseCompression:     args.compression,
 			MaxFrameSize:       args.maxFrameBytes,
 			ReceiveBufferSize:  args.receiveBufferSize,
 			OnClientHello:      handleClientHello,

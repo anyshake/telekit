@@ -115,6 +115,6 @@ The examples expose MQTT queue limits. `netconn` and `p2pssh` also expose generi
 
 Library users can pass `transports.ITransport` values directly; leaving the server transport unset defaults to reliable QUIC. SCTP/DataChannel tuning stays in the transport implementation.
 
-Servers also expose connection, pending-handshake, global-buffer, handshake-timeout, and ClientHello rate limits. Run a program with `-h` for the complete list. `-compression` must match on both peers.
+Servers also expose connection, pending-handshake, global-buffer, handshake-timeout, and ClientHello rate limits. Run a program with `-h` for the complete list.
 
 Logs use a consistent `[telekit <mode>/<role>]` prefix and do not print PSKs, identity seeds, Broker credentials, Candidates, or application payloads.

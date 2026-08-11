@@ -71,7 +71,6 @@ func testCodec(t *testing.T) *Codec {
 		encryption.XCHACHA20_POLY1305,
 		bytes.Repeat([]byte{0x42}, 32),
 		[]byte("test"),
-		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -98,33 +97,24 @@ func encodeWireChunks(t *testing.T, chunks [][]byte) []byte {
 }
 
 func BenchmarkCodecSmallFrame(b *testing.B) {
-	for _, compressed := range []bool{false, true} {
-		name := "uncompressed"
-		if compressed {
-			name = "compressed"
+	codec, err := NewCodec(
+		encryption.XCHACHA20_POLY1305,
+		bytes.Repeat([]byte{0x42}, 32),
+		[]byte("benchmark"),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("x"), 256)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		encoded, err := codec.EncodeWithEncryption(payload)
+		if err != nil {
+			b.Fatal(err)
 		}
-		b.Run(name, func(b *testing.B) {
-			codec, err := NewCodec(
-				encryption.XCHACHA20_POLY1305,
-				bytes.Repeat([]byte{0x42}, 32),
-				[]byte("benchmark"),
-				compressed,
-			)
-			if err != nil {
-				b.Fatal(err)
-			}
-			payload := bytes.Repeat([]byte("x"), 256)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				encoded, err := codec.EncodeWithEncryption(payload)
-				if err != nil {
-					b.Fatal(err)
-				}
-				if _, err := codec.DecodeWithDecryption(encoded); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
+		if _, err := codec.DecodeWithDecryption(encoded); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

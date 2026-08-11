@@ -44,8 +44,8 @@ sensor clients behind NAT                          collector server behind NAT
 - Transport capabilities, selection, ICE credentials, and candidates are encrypted with a derived session key.
 - Clients pin the server's Ed25519 public key.
 - Each connection uses ephemeral X25519 and HKDF to derive its own session key.
-- Post-handshake signaling uses AEAD headers, sequence numbers, and replay windows.
-- Application frames are encrypted with the session key and the selected transport's own mechanisms.
+- Post-handshake signaling payloads are authenticated and encrypted, with sequence numbers and replay windows.
+- Application and heartbeat frames use directional session keys, authenticated sequence numbers, and the selected transport's own mechanisms.
 - HTTP/3 transport data is carried in an authenticated HTTP/3 request body. Invalid HTTP/3 requests are handled by the configured fallback site.
 
 Configure the HTTP/3 transport on the server with a real certificate and an

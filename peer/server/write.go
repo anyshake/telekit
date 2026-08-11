@@ -4,18 +4,28 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"os"
+
+	"github.com/anyshake/telekit/peer"
 )
 
-func (c *Connection) sendHeartbeat() error {
+func (c *Connection) sendHeartbeat(expectedConn net.Conn, expectedDataChannel *peer.DataChannel) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	conn := c.transportConnValue()
-	if conn == nil {
+	conn, dataChannel := c.transportState()
+	if conn == nil || conn != expectedConn || dataChannel != expectedDataChannel {
 		return errors.New("transport not connected")
 	}
-	var frame [8]byte
-	n, err := conn.Write(frame[:])
+	sequence, ciphertext, err := dataChannel.SealHeartbeat()
+	if err != nil {
+		return err
+	}
+	frame := make([]byte, 8+peer.DataFrameSequenceSize+len(ciphertext))
+	binary.BigEndian.PutUint64(frame[:8], uint64(len(ciphertext)))
+	binary.BigEndian.PutUint64(frame[8:8+peer.DataFrameSequenceSize], sequence)
+	copy(frame[8+peer.DataFrameSequenceSize:], ciphertext)
+	n, err := conn.Write(frame)
 	if err != nil {
 		return err
 	}
@@ -29,8 +39,8 @@ func (c *Connection) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	originalLen := len(p)
-	conn := c.transportConnValue()
-	if conn == nil {
+	conn, dataChannel := c.transportState()
+	if conn == nil || dataChannel == nil || c.closed.Load() {
 		return 0, errors.New("transport not connected")
 	}
 	if c.writeTimedOut() {
@@ -43,10 +53,11 @@ func (c *Connection) Write(p []byte) (int, error) {
 	frameLimit := c.maxFrameSize()
 	for plaintextOffset := 0; plaintextOffset < originalLen; {
 		plaintextEnd := min(plaintextOffset+frameLimit-64, originalLen)
+		var sequence uint64
 		var ciphertext []byte
 		for {
 			var err error
-			ciphertext, err = c.codec.EncodeWithEncryption(p[plaintextOffset:plaintextEnd])
+			sequence, ciphertext, err = dataChannel.Seal(p[plaintextOffset:plaintextEnd])
 			if err != nil {
 				return plaintextOffset, err
 			}
@@ -58,9 +69,10 @@ func (c *Connection) Write(p []byte) (int, error) {
 			}
 			plaintextEnd = plaintextOffset + (plaintextEnd-plaintextOffset)/2
 		}
-		header := make([]byte, 8)
-		binary.BigEndian.PutUint64(header, uint64(len(ciphertext)))
-		frame := append(header, ciphertext...)
+		frame := make([]byte, 8+peer.DataFrameSequenceSize+len(ciphertext))
+		binary.BigEndian.PutUint64(frame[:8], uint64(len(ciphertext)))
+		binary.BigEndian.PutUint64(frame[8:8+peer.DataFrameSequenceSize], sequence)
+		copy(frame[8+peer.DataFrameSequenceSize:], ciphertext)
 
 		if _, err := conn.Write(frame); err != nil {
 			return plaintextOffset, err

@@ -82,10 +82,9 @@ func TestEncryptedNetConnRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	listener, err := peerserver.NewServer(serverAPI, &peerserver.Options{
-		KeyProvider:    peer.StaticKeyring{"client-one": key},
-		IdentityKey:    serverIdentityKey,
-		Transport:      transportkcp.DefaultTransport(),
-		UseCompression: true,
+		KeyProvider: peer.StaticKeyring{"client-one": key},
+		IdentityKey: serverIdentityKey,
+		Transport:   transportkcp.DefaultTransport(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -112,9 +111,8 @@ func TestEncryptedNetConnRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn, err := client.NewClient(peer.PreSharedKey{ClientID: "client-one", Key: key, ServerPublicKey: serverPublicKey}, clientAPI, &client.Options{
-		Timeout:        10 * time.Second,
-		Transport:      transportkcp.DefaultTransport(),
-		UseCompression: true,
+		Timeout:   10 * time.Second,
+		Transport: transportkcp.DefaultTransport(),
 	})
 	if err != nil {
 		t.Fatal(err)

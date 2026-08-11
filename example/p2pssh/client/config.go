@@ -14,7 +14,6 @@ type telekitSessionConfig struct {
 	secret             string
 	serverPublicKey    ed25519.PublicKey
 	timeout            time.Duration
-	compression        bool
 	maxFrameBytes      int
 	receiveBufferBytes int
 	maxPendingICE      int

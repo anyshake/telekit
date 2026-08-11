@@ -86,7 +86,6 @@ func main() {
 		),
 		&peerserver.Options{
 			IdentityKey:          identityKey,
-			UseCompression:       args.compression,
 			MaxFrameSize:         args.maxFrameBytes,
 			ReceiveBufferSize:    args.receiveBufferBytes,
 			MaxBufferedBytes:     args.maxBufferedBytes,

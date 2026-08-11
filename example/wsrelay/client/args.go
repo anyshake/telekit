@@ -16,7 +16,6 @@ type arguments struct {
 	serverPubKey      string
 	timeout           time.Duration
 	transport         string
-	compression       bool
 	maxFrameBytes     int
 	receiveBufferSize int
 	relayBaseURL      string
@@ -33,7 +32,6 @@ func parseCLIArguments() *arguments {
 	flag.StringVar(&args.serverPubKey, "server-public-key", demoServerPublicKey, "pinned Ed25519 server public key (hex)")
 	flag.DurationVar(&args.timeout, "timeout", 30*time.Second, "connection timeout")
 	flag.StringVar(&args.transport, "transport", "quic", "data transport (quic, http3, kcp, sctp, rawudp)")
-	flag.BoolVar(&args.compression, "compression", false, "enable zstd compression")
 	flag.IntVar(&args.maxFrameBytes, "max-frame-bytes", 4<<20, "maximum encrypted transport frame size")
 	flag.IntVar(&args.receiveBufferSize, "receive-buffer-bytes", 8<<20, "maximum unread stream data")
 	flag.StringVar(&args.relayBaseURL, "relay-base-url", "ws://127.0.0.1:8080", "WebSocket relay URL; empty path uses /relay/<server-id>, trailing slash appends server ID")

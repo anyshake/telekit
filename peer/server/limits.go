@@ -1,8 +1,11 @@
 package server
 
 import (
+	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/pion/ice/v4"
 )
 
 func reserveCounter(counter *atomic.Int64, limit int) bool {
@@ -28,12 +31,19 @@ func (s *Server) reserveConnection() bool {
 	return true
 }
 
-func (c *Connection) markEstablished() {
+func (c *Connection) markEstablished(expectedAgent *ice.Agent, expectedTransport net.Conn) bool {
+	c.stateMu.Lock()
+	if c.closed.Load() || c.iceAgent != expectedAgent || c.transportConn != expectedTransport || !c.isCurrent() {
+		c.stateMu.Unlock()
+		return false
+	}
 	c.established.Store(true)
+	c.stateMu.Unlock()
 	if c.pendingLease.Swap(false) {
 		c.owner.pendingHandshakes.Add(-1)
 	}
 	c.stopHandshakeTimer()
+	return true
 }
 
 func (c *Connection) releaseLease() {
@@ -48,13 +58,10 @@ func (c *Connection) releaseLease() {
 
 func (c *Connection) startHandshakeTimer(timeout time.Duration) {
 	c.handshakeMu.Lock()
-	if c.handshakeTimer == nil {
+	if c.handshakeTimer == nil && !c.closed.Load() {
 		c.handshakeTimer = time.AfterFunc(timeout, func() {
 			if !c.pendingLease.Load() {
 				return
-			}
-			if current, ok := c.owner.connections.Get(c.sourceId); ok && current == c {
-				c.owner.connections.Del(c.sourceId)
 			}
 			_ = c.Close()
 		})

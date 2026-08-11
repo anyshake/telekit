@@ -7,7 +7,6 @@ import (
 	"github.com/anyshake/telekit/peer"
 	"github.com/anyshake/telekit/peer/api"
 	transportquic "github.com/anyshake/telekit/transports/transport_quic"
-	"github.com/anyshake/telekit/utils/compression"
 	"github.com/anyshake/telekit/utils/encryption"
 )
 
@@ -61,21 +60,11 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 		options.MaxPendingICE < 1 || options.MaxPendingICEBytes < 1 {
 		return nil, errors.New("invalid client resource limits")
 	}
-	if options.UseCompression && options.MaxFrameSize > compression.MaxDecodedSize {
-		return nil, errors.New("compressed frame size exceeds decompression safety limit")
-	}
-
-	codec, err := peer.NewCodec(options.EncryptionType, psk.Key, options.EncryptionAAD, options.UseCompression)
-	if err != nil {
-		return nil, err
-	}
-
 	c := &Client{
 		clientId: psk.ClientID,
 		psk:      psk,
 		api:      api,
 		options:  options,
-		codec:    codec,
 	}
 	c.recvBuf.Store(peer.NewRecvBufferWithLimit(options.ReceiveBufferSize, nil))
 	return c, nil

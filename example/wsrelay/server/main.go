@@ -57,7 +57,6 @@ func main() {
 			},
 			IdentityKey:          identityKey,
 			Transports:           common.ServerTransports(),
-			UseCompression:       args.compression,
 			MaxFrameSize:         args.maxFrameBytes,
 			ReceiveBufferSize:    args.receiveBufferSize,
 			MaxBufferedBytes:     args.maxBufferedBytes,

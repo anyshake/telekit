@@ -26,6 +26,7 @@ const (
 type ProviderConfig struct {
 	URL     string
 	Session string
+	// Token is optional and is forwarded verbatim to the relay server.
 	Token   string
 	LocalID string
 	PeerID  string
@@ -49,9 +50,6 @@ func NewProvider(config ProviderConfig) (*Provider, error) {
 	}
 	if config.Session == "" {
 		return nil, errors.New("websocket relay session is empty")
-	}
-	if config.Token == "" {
-		return nil, errors.New("websocket relay token is empty")
 	}
 	if config.LocalID == "" || config.PeerID == "" {
 		return nil, errors.New("websocket relay local and peer IDs are required")

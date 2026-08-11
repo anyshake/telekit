@@ -35,6 +35,7 @@ func (c *Client) Connect() error {
 }
 
 func (c *Client) ConnectWithContext(ctx context.Context) error {
+	c.manualDisconnect.Store(false)
 	return c.connectWithContext(ctx, false)
 }
 
@@ -52,12 +53,12 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 		c.mu.Unlock()
 	}()
 
-	codec, err := peer.NewCodec(c.options.EncryptionType, c.psk.Key, c.options.EncryptionAAD, c.options.UseCompression)
-	if err != nil {
-		return err
-	}
+	c.stateMu.Lock()
 	c.serverId = ""
-	c.clearPhysicalAddrs()
+	c.codec = nil
+	c.localAddr = peer.Addr{}
+	c.remoteAddr = peer.Addr{}
+	c.stateMu.Unlock()
 	c.signalSend.Store(0)
 	c.signalRecv.Reset()
 	succeeded := false
@@ -73,13 +74,13 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 		buffer.Reset()
 	}
 
-	attempt, err := c.buildClientHello(codec)
+	attempt, err := c.buildClientHello()
 	if err != nil {
 		return err
 	}
 	handshakeCh := make(chan *serverHandshake, 1)
 	sub, err := c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageHello, func(data []byte) {
-		handshake, err := c.handleServerHello(codec, data, attempt)
+		handshake, err := c.handleServerHello(data, attempt)
 		if err != nil {
 			return
 		}
@@ -105,8 +106,10 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	for handshake == nil {
 		select {
 		case handshake = <-handshakeCh:
+			c.stateMu.Lock()
 			c.codec = handshake.codec
 			c.serverId = handshake.serverID
+			c.stateMu.Unlock()
 			if c.options.OnServerHello != nil {
 				c.options.OnServerHello(c)
 			}
@@ -125,14 +128,18 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	}
 	answers := make(chan transports.ICEDescription, 1)
 	answerSub, err := c.api.SignalingServer.Subscribe(c.api.RoomId, signaling.MessageAnswer, func(data []byte) {
-		msg, err := c.codec.DecodeMessage(data)
-		if err != nil || msg.Header.SourceId != c.serverId || msg.Header.TargetId != c.clientId || !c.signalRecv.Accept(msg.Header.Sequence) {
+		msg, err := handshake.codec.DecodeMessage(data)
+		if err != nil || msg.Header.SourceId != handshake.serverID || msg.Header.TargetId != c.clientId || !c.signalRecv.Accept(msg.Header.Sequence) {
 			return
 		}
 		if msg.Header.Type != peer.MessageTypeICEAnswer || msg.Payload == nil || msg.Payload.ICEUsername == "" || msg.Payload.ICEPassword == "" {
 			return
 		}
-		answer := transports.ICEDescription{UsernameFragment: msg.Payload.ICEUsername, Password: msg.Payload.ICEPassword, Candidates: append([]string(nil), msg.Payload.ICECandidates...)}
+		answer := transports.ICEDescription{UsernameFragment: msg.Payload.ICEUsername, Password: msg.Payload.ICEPassword, Candidates: msg.Payload.ICECandidates}
+		if err := transports.ValidateICEDescriptionLimits(answer, c.options.MaxPendingICE, c.options.MaxPendingICEBytes); err != nil {
+			return
+		}
+		answer.Candidates = append([]string(nil), answer.Candidates...)
 		if c.options.OnICEAnswer != nil {
 			c.options.OnICEAnswer(c, answer)
 		}
@@ -158,9 +165,9 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	if err != nil {
 		return err
 	}
-	c.stateMu.Lock()
-	c.iceAgent = agent
-	c.stateMu.Unlock()
+	if !c.installICEAgent(agent) {
+		return net.ErrClosed
+	}
 	description, err := transports.GatherICEWithCallback(agent, func(candidate ice.Candidate) {
 		if candidate == nil {
 			if c.options.OnICECandidateGatheringComplete != nil {
@@ -192,6 +199,9 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	if err != nil {
 		return err
 	}
+	if err := transports.ValidateICEDescriptionLimits(description, c.options.MaxPendingICE, c.options.MaxPendingICEBytes); err != nil {
+		return err
+	}
 	if c.options.OnICEOffer != nil {
 		c.options.OnICEOffer(c, description)
 	}
@@ -212,17 +222,20 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 	}
 	c.setPhysicalAddrs(iceConn.LocalAddr(), iceConn.RemoteAddr())
 	selected := c.options.Transport
-	_, transportKey := c.codec.GetSecret()
+	transportKey := handshake.codec.SessionKey()
 	endpoint := transports.ICEEndpoint(iceConn, endpointLocal, endpointRemote, transportKey)
 	dataConn, err := selected.Dial(ctx, endpoint)
 	if err != nil {
 		_ = iceConn.Close()
 		return err
 	}
-	c.setTransportConn(dataConn)
+	if !c.setTransportConn(agent, dataConn, handshake.dataChannel) {
+		return net.ErrClosed
+	}
 	c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
-	go c.readTransport(dataConn, transportPacketMode(selected))
-	go c.monitorTransport(dataConn)
+	recvBuf := c.recvBuf.Load()
+	go c.readTransport(dataConn, handshake.dataChannel, recvBuf, transportPacketMode(selected))
+	go c.monitorTransport(dataConn, handshake.dataChannel)
 	c.setIsConnected(true)
 	succeeded = true
 	if c.options.OnConnected != nil {
@@ -232,8 +245,14 @@ func (c *Client) connectWithContext(ctx context.Context, preserveReceiveBuffer b
 }
 
 func (c *Client) publishTransportSelect() error {
-	data, err := c.codec.EncodeMessage(&peer.Message{
-		Header:  &peer.Header{SourceId: c.clientId, TargetId: c.serverId, Type: peer.MessageTypeTransportSelect, Sequence: c.signalSend.Add(1)},
+	c.stateMu.RLock()
+	codec, serverID := c.codec, c.serverId
+	c.stateMu.RUnlock()
+	if codec == nil || serverID == "" {
+		return errors.New("signaling session is not established")
+	}
+	data, err := codec.EncodeMessage(&peer.Message{
+		Header:  &peer.Header{SourceId: c.clientId, TargetId: serverID, Type: peer.MessageTypeTransportSelect, Sequence: c.signalSend.Add(1)},
 		Payload: &peer.Payload{Transport: c.options.Transport.Name()},
 	})
 	if err != nil {
@@ -243,9 +262,18 @@ func (c *Client) publishTransportSelect() error {
 }
 
 func (c *Client) publishICEOffer(description transports.ICEDescription) error {
-	data, err := c.codec.EncodeMessage(&peer.Message{
-		Header:  &peer.Header{SourceId: c.clientId, TargetId: c.serverId, Type: peer.MessageTypeICEOffer, Sequence: c.signalSend.Add(1)},
-		Payload: &peer.Payload{ICEUsername: description.UsernameFragment, ICEPassword: description.Password, ICECandidates: description.Candidates},
+	if err := transports.ValidateICEDescriptionLimits(description, c.options.MaxPendingICE, c.options.MaxPendingICEBytes); err != nil {
+		return err
+	}
+	c.stateMu.RLock()
+	codec, serverID := c.codec, c.serverId
+	c.stateMu.RUnlock()
+	if codec == nil || serverID == "" {
+		return errors.New("signaling session is not established")
+	}
+	data, err := codec.EncodeMessage(&peer.Message{
+		Header:  &peer.Header{SourceId: c.clientId, TargetId: serverID, Type: peer.MessageTypeICEOffer, Sequence: c.signalSend.Add(1)},
+		Payload: &peer.Payload{ICEUsername: description.UsernameFragment, ICEPassword: description.Password, ICECandidates: append([]string(nil), description.Candidates...)},
 	})
 	if err != nil {
 		return err
@@ -253,27 +281,30 @@ func (c *Client) publishICEOffer(description transports.ICEDescription) error {
 	return c.api.SignalingServer.Publish(c.api.RoomId, signaling.MessageOffer, data)
 }
 
-func (c *Client) readTransport(conn net.Conn, packetMode bool) {
+func (c *Client) readTransport(conn net.Conn, dataChannel *peer.DataChannel, recvBuf *peer.RecvBuffer, packetMode bool) {
 	if packetMode {
-		c.readRawTransport(conn)
+		c.readRawTransport(conn, dataChannel, recvBuf)
 		return
 	}
 
 	var header [8]byte
+	var sequenceBytes [peer.DataFrameSequenceSize]byte
 	var frame []byte
 	for {
 		if _, err := io.ReadFull(conn, header[:]); err != nil {
 			break
 		}
-		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
+		if !c.isCurrentTransport(conn, dataChannel) {
+			break
+		}
 		length := binary.BigEndian.Uint64(header[:])
 		if length == 0 {
-			if err := c.sendHeartbeat(); err != nil {
-				break
-			}
-			continue
+			break
 		}
 		if length > uint64(c.options.MaxFrameSize) {
+			break
+		}
+		if _, err := io.ReadFull(conn, sequenceBytes[:]); err != nil {
 			break
 		}
 		if cap(frame) < int(length) {
@@ -284,66 +315,82 @@ func (c *Client) readTransport(conn net.Conn, packetMode bool) {
 		if _, err := io.ReadFull(conn, frame); err != nil {
 			break
 		}
-		raw, err := c.codec.DecodeWithDecryptionLimit(frame, c.options.MaxFrameSize)
+		sequence := binary.BigEndian.Uint64(sequenceBytes[:])
+		frameType, raw, err := dataChannel.OpenFrame(sequence, frame, c.options.MaxFrameSize)
 		if err != nil || len(raw) > c.options.MaxFrameSize {
 			break
 		}
-		if err := c.recvBuf.Load().Write(raw); err != nil {
+		if !c.isCurrentTransport(conn, dataChannel) {
+			break
+		}
+		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
+		if frameType == peer.DataFrameHeartbeat {
+			continue
+		}
+		if err := recvBuf.Write(raw); err != nil {
 			break
 		}
 	}
-	c.finishTransport(conn)
+	c.finishTransport(conn, dataChannel)
 }
 
-func (c *Client) readRawTransport(conn net.Conn) {
-	packet := make([]byte, c.options.MaxFrameSize+8)
+func (c *Client) readRawTransport(conn net.Conn, dataChannel *peer.DataChannel, recvBuf *peer.RecvBuffer) {
+	packet := make([]byte, c.options.MaxFrameSize+8+peer.DataFrameSequenceSize)
 	for {
 		n, err := conn.Read(packet)
 		if err != nil {
 			break
 		}
-		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
+		if !c.isCurrentTransport(conn, dataChannel) {
+			break
+		}
 		if n < 8 {
 			break
 		}
 		length := binary.BigEndian.Uint64(packet[:8])
 		if length == 0 {
-			if n != 8 {
-				break
-			}
-			if err := c.sendHeartbeat(); err != nil {
-				break
-			}
-			continue
-		}
-		if length > uint64(c.options.MaxFrameSize) || int(length) != n-8 {
 			break
 		}
-		raw, err := c.codec.DecodeWithDecryptionLimit(packet[8:n], c.options.MaxFrameSize)
+		if n < 8+peer.DataFrameSequenceSize || length > uint64(c.options.MaxFrameSize) || int(length) != n-8-peer.DataFrameSequenceSize {
+			break
+		}
+		sequenceOffset := 8 + peer.DataFrameSequenceSize
+		sequence := binary.BigEndian.Uint64(packet[8:sequenceOffset])
+		frameType, raw, err := dataChannel.OpenFrame(sequence, packet[sequenceOffset:n], c.options.MaxFrameSize)
+		if errors.Is(err, peer.ErrDataFrameReplay) {
+			continue
+		}
 		if err != nil || len(raw) > c.options.MaxFrameSize {
 			break
 		}
-		if err := c.recvBuf.Load().Write(raw); err != nil {
+		if !c.isCurrentTransport(conn, dataChannel) {
+			break
+		}
+		c.lastTransportRead.Store(c.options.GetTimeFunc().UnixNano())
+		if frameType == peer.DataFrameHeartbeat {
+			continue
+		}
+		if err := recvBuf.Write(raw); err != nil {
 			break
 		}
 	}
-	c.finishTransport(conn)
+	c.finishTransport(conn, dataChannel)
 }
 
-func (c *Client) monitorTransport(conn net.Conn) {
+func (c *Client) monitorTransport(conn net.Conn, dataChannel *peer.DataChannel) {
 	ticker := time.NewTicker(transportKeepaliveInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if c.transportConnValue() != conn {
+		if !c.isCurrentTransport(conn, dataChannel) {
 			return
 		}
 		lastRead := time.Unix(0, c.lastTransportRead.Load())
 		if c.options.GetTimeFunc().Sub(lastRead) >= transportKeepaliveTimeout {
-			_ = c.finishTransport(conn)
+			_ = c.finishTransport(conn, dataChannel)
 			return
 		}
-		if err := c.sendHeartbeat(); err != nil {
-			_ = c.finishTransport(conn)
+		if err := c.sendHeartbeat(conn, dataChannel); err != nil {
+			_ = c.finishTransport(conn, dataChannel)
 			return
 		}
 	}

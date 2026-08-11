@@ -61,10 +61,12 @@ func (s *Server) Listen() error {
 		if conn == nil || err != nil {
 			return
 		}
-		s.connections.Set(conn.sourceId, conn)
+		if !s.setConnection(conn) {
+			_ = conn.Close()
+			return
+		}
 		conn.startHandshakeTimer(s.options.HandshakeTimeout)
 		if err := s.sendServerHello(conn); err != nil {
-			s.connections.Del(conn.sourceId)
 			_ = conn.Close()
 		}
 	})
@@ -85,6 +87,9 @@ func (s *Server) Listen() error {
 		if err != nil || !conn.signalRecv.Accept(msg.Header.Sequence) || msg.Payload == nil {
 			return
 		}
+		if !conn.isCurrent() {
+			return
+		}
 		switch msg.Header.Type {
 		case peer.MessageTypeDisconnect:
 			// The client sends this before closing its data transport. Removing
@@ -97,10 +102,10 @@ func (s *Server) Listen() error {
 			}
 			var pendingOffer *transportcore.ICEDescription
 			conn.stateMu.Lock()
-			if conn.selectedTransport == "" {
+			if !conn.closed.Load() && conn.selectedTransport == "" {
 				conn.selectedTransport = msg.Payload.Transport
 			}
-			if conn.pendingICEOffer != nil {
+			if !conn.closed.Load() && conn.pendingICEOffer != nil {
 				pendingOffer = conn.pendingICEOffer
 				conn.pendingICEOffer = nil
 			}
@@ -115,14 +120,18 @@ func (s *Server) Listen() error {
 			offer := transportcore.ICEDescription{
 				UsernameFragment: msg.Payload.ICEUsername,
 				Password:         msg.Payload.ICEPassword,
-				Candidates:       append([]string(nil), msg.Payload.ICECandidates...),
+				Candidates:       msg.Payload.ICECandidates,
 			}
-			if s.options.OnICEOffer != nil {
+			if err := transportcore.ValidateICEDescriptionLimits(offer, s.options.MaxPendingICE, s.options.MaxPendingICEBytes); err != nil {
+				return
+			}
+			offer.Candidates = append([]string(nil), offer.Candidates...)
+			if s.options.OnICEOffer != nil && conn.isCurrent() {
 				s.options.OnICEOffer(conn, offer)
 			}
 			conn.stateMu.Lock()
-			selected := conn.selectedTransport != ""
-			if !selected {
+			selected := !conn.closed.Load() && conn.selectedTransport != ""
+			if !conn.closed.Load() && !selected {
 				conn.pendingICEOffer = &offer
 			}
 			conn.stateMu.Unlock()
@@ -139,15 +148,8 @@ func (s *Server) Listen() error {
 }
 
 func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescription) {
-	conn.stateMu.RLock()
-	selectedName := conn.selectedTransport
-	conn.stateMu.RUnlock()
-	if selectedName == "" {
-		return
-	}
-	relayProvider, err := s.api.WebSocketRelayProvider(s.serverId, conn.sourceId)
-	if err != nil {
-		_ = conn.Close()
+	selectedName, ok := conn.selectedTransportForSetup()
+	if !ok {
 		return
 	}
 	agentOptions := append([]ice.AgentOption(nil), s.options.ICEAgentOptions...)
@@ -156,7 +158,18 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 		_ = conn.Close()
 		return
 	}
+	if !conn.installICEAgent(agent) {
+		return
+	}
+	relayProvider, err := s.api.WebSocketRelayProvider(s.serverId, conn.sourceId)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
 	description, err := transportcore.GatherICEWithCallback(agent, func(candidate ice.Candidate) {
+		if !conn.ownsICEAgent(agent) {
+			return
+		}
 		if candidate == nil {
 			if s.options.OnICECandidateGatheringComplete != nil {
 				s.options.OnICECandidateGatheringComplete(conn)
@@ -167,6 +180,9 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 			s.options.OnICECandidate(conn, candidate)
 		}
 	}, func() error {
+		if !conn.ownsICEAgent(agent) {
+			return net.ErrClosed
+		}
 		if relayProvider == nil {
 			return nil
 		}
@@ -187,15 +203,26 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 		return nil
 	})
 	if err != nil {
+		if conn.ownsICEAgent(agent) {
+			_ = conn.Close()
+		} else {
+			_ = agent.Close()
+		}
+		return
+	}
+	if !conn.ownsICEAgent(agent) {
 		_ = agent.Close()
+		return
+	}
+	if err := transportcore.ValidateICEDescriptionLimits(description, s.options.MaxPendingICE, s.options.MaxPendingICEBytes); err != nil {
 		_ = conn.Close()
 		return
 	}
-	conn.stateMu.Lock()
-	conn.iceAgent = agent
-	conn.stateMu.Unlock()
 	if s.options.OnICEAnswer != nil {
 		s.options.OnICEAnswer(conn, description)
+	}
+	if !conn.ownsICEAgent(agent) {
+		return
 	}
 	if err := s.sendICEAnswer(conn, description); err != nil {
 		_ = conn.Close()
@@ -208,19 +235,19 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 		_ = conn.Close()
 		return
 	}
+	if !conn.ownsICEAgent(agent) {
+		_ = iceConn.Close()
+		return
+	}
 	selected := findTransport(s.options.Transports, selectedName)
 	if selected == nil {
 		_ = iceConn.Close()
 		_ = conn.Close()
 		return
 	}
-	conn.stateMu.Lock()
-	conn.transportMaxFrameSize = transportMaxFrameSize(selected)
-	conn.stateMu.Unlock()
 	endpointLocal := peer.Addr{RoomID: conn.roomId, PeerID: conn.serverId}
 	endpointRemote := peer.Addr{RoomID: conn.roomId, PeerID: conn.sourceId}
-	conn.setPhysicalAddrs(iceConn.LocalAddr(), iceConn.RemoteAddr())
-	_, transportKey := conn.codec.GetSecret()
+	transportKey := conn.codec.SessionKey()
 	endpoint := transportcore.ICEEndpoint(iceConn, endpointLocal, endpointRemote, transportKey)
 	dataConn, err := selected.Accept(ctx, endpoint)
 	if err != nil {
@@ -228,14 +255,25 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 		_ = conn.Close()
 		return
 	}
+	if !conn.installTransport(agent, dataConn, transportMaxFrameSize(selected), iceConn.LocalAddr(), iceConn.RemoteAddr()) {
+		_ = iceConn.Close()
+		return
+	}
 	conn.lastTransportRead.Store(s.options.GetTimeFunc().UnixNano())
-	conn.setTransportConn(dataConn)
-	go conn.readTransport(dataConn, transportPacketMode(selected))
-	conn.markEstablished()
-	go monitorTransport(conn)
+	_, dataChannel := conn.transportState()
+	if !conn.markEstablished(agent, dataConn) {
+		_ = conn.Close()
+		return
+	}
+	go conn.readTransport(dataConn, dataChannel, transportPacketMode(selected))
+	go monitorTransport(conn, dataConn, dataChannel)
+	if !conn.isCurrentTransport(dataConn, dataChannel) {
+		_ = conn.Close()
+		return
+	}
 	select {
 	case s.acceptCh <- conn:
-		if s.options.OnConnected != nil {
+		if s.options.OnConnected != nil && conn.isCurrentTransport(dataConn, dataChannel) {
 			s.options.OnConnected(conn)
 		}
 	case <-s.closeCh:
@@ -245,11 +283,11 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 	}
 }
 
-func monitorTransport(conn *Connection) {
+func monitorTransport(conn *Connection, transportConn net.Conn, dataChannel *peer.DataChannel) {
 	ticker := time.NewTicker(transportKeepaliveInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if conn.transportConnValue() == nil {
+		if !conn.isCurrentTransport(transportConn, dataChannel) {
 			return
 		}
 		lastRead := time.Unix(0, conn.lastTransportRead.Load())
@@ -257,7 +295,7 @@ func monitorTransport(conn *Connection) {
 			_ = conn.Close()
 			return
 		}
-		if err := conn.sendHeartbeat(); err != nil {
+		if err := conn.sendHeartbeat(transportConn, dataChannel); err != nil {
 			_ = conn.Close()
 			return
 		}
@@ -265,9 +303,12 @@ func monitorTransport(conn *Connection) {
 }
 
 func (s *Server) sendICEAnswer(conn *Connection, description transportcore.ICEDescription) error {
+	if err := transportcore.ValidateICEDescriptionLimits(description, s.options.MaxPendingICE, s.options.MaxPendingICEBytes); err != nil {
+		return err
+	}
 	data, err := conn.codec.EncodeMessage(&peer.Message{
 		Header:  &peer.Header{SourceId: s.serverId, TargetId: conn.sourceId, Type: peer.MessageTypeICEAnswer, Sequence: conn.signalSend.Add(1)},
-		Payload: &peer.Payload{ICEUsername: description.UsernameFragment, ICEPassword: description.Password, ICECandidates: description.Candidates},
+		Payload: &peer.Payload{ICEUsername: description.UsernameFragment, ICEPassword: description.Password, ICECandidates: append([]string(nil), description.Candidates...)},
 	})
 	if err != nil {
 		return err

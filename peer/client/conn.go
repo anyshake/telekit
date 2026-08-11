@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/anyshake/telekit/peer"
+	"github.com/pion/ice/v4"
 )
 
 func (c *Client) Close() error { return c.Disconnect() }
@@ -70,22 +71,65 @@ func (c *Client) writeTimedOut() bool {
 	return !deadline.IsZero() && c.options.GetTimeFunc().After(deadline)
 }
 
-func (c *Client) setTransportConn(conn net.Conn) {
+func (c *Client) installICEAgent(agent *ice.Agent) bool {
+	if agent == nil {
+		return false
+	}
 	c.stateMu.Lock()
-	c.transportConn = conn
+	accepted := !c.manualDisconnect.Load() && c.iceAgent == nil && c.transportConn == nil
+	if accepted {
+		c.iceAgent = agent
+	}
 	c.stateMu.Unlock()
+	if !accepted {
+		_ = agent.Close()
+	}
+	return accepted
+}
+
+func (c *Client) setTransportConn(agent *ice.Agent, conn net.Conn, dataChannel *peer.DataChannel) bool {
+	if conn == nil {
+		return false
+	}
+	c.stateMu.Lock()
+	accepted := !c.manualDisconnect.Load() && c.iceAgent == agent && c.transportConn == nil && dataChannel != nil
+	if accepted {
+		c.transportConn = conn
+		c.dataChannel = dataChannel
+	}
+	c.stateMu.Unlock()
+	if !accepted {
+		_ = conn.Close()
+	}
+	return accepted
+}
+
+func (c *Client) transportState() (net.Conn, *peer.DataChannel) {
+	c.stateMu.RLock()
+	conn := c.transportConn
+	dataChannel := c.dataChannel
+	c.stateMu.RUnlock()
+	return conn, dataChannel
+}
+
+func (c *Client) isCurrentTransport(conn net.Conn, dataChannel *peer.DataChannel) bool {
+	c.stateMu.RLock()
+	current := c.transportConn == conn && c.dataChannel == dataChannel
+	c.stateMu.RUnlock()
+	return current
 }
 
 // finishTransport detaches only conn's transport generation. A reader from an
 // old connection must not tear down a newer connection established after a
 // reconnect.
-func (c *Client) finishTransport(conn net.Conn) bool {
+func (c *Client) finishTransport(conn net.Conn, dataChannel *peer.DataChannel) bool {
 	c.stateMu.Lock()
-	if c.transportConn != conn {
+	if c.transportConn != conn || c.dataChannel != dataChannel {
 		c.stateMu.Unlock()
 		return false
 	}
 	c.transportConn = nil
+	c.dataChannel = nil
 	agent := c.iceAgent
 	c.iceAgent = nil
 	c.localAddr = peer.Addr{}
@@ -102,13 +146,14 @@ func (c *Client) finishTransport(conn net.Conn) bool {
 	if c.options.OnDisconnected != nil {
 		c.options.OnDisconnected(c)
 	}
+	if c.manualDisconnect.Load() {
+		return true
+	}
 	go c.reconnectAfterTransportFailure(reconnectGeneration)
 	return true
 }
 
 func (c *Client) transportConnValue() net.Conn {
-	c.stateMu.RLock()
-	conn := c.transportConn
-	c.stateMu.RUnlock()
+	conn, _ := c.transportState()
 	return conn
 }

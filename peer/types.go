@@ -31,11 +31,12 @@ const (
 )
 
 type Header struct {
-	Type     MessageType
-	SourceId string
-	TargetId string
-	Sequence uint64
-	Metadata map[string]any
+	Type           MessageType
+	SourceId       string
+	TargetId       string
+	Sequence       uint64
+	HandshakeNonce []byte
+	Metadata       map[string]any
 }
 
 type Payload struct {

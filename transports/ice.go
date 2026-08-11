@@ -2,6 +2,7 @@ package transports
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -15,6 +16,28 @@ type ICEDescription struct {
 	UsernameFragment string
 	Password         string
 	Candidates       []string
+}
+
+// ValidateICEDescriptionLimits bounds the complete signaling representation
+// before it is retained or passed to Pion ICE.
+func ValidateICEDescriptionLimits(description ICEDescription, maxCandidates, maxBytes int) error {
+	if maxCandidates < 1 || maxBytes < 1 {
+		return errors.New("invalid ICE description limits")
+	}
+	if len(description.Candidates) > maxCandidates {
+		return fmt.Errorf("ICE description has %d candidates, maximum is %d", len(description.Candidates), maxCandidates)
+	}
+	total := len(description.UsernameFragment) + len(description.Password)
+	if total > maxBytes {
+		return fmt.Errorf("ICE description exceeds %d bytes", maxBytes)
+	}
+	for _, candidate := range description.Candidates {
+		if len(candidate) > maxBytes-total {
+			return fmt.Errorf("ICE description exceeds %d bytes", maxBytes)
+		}
+		total += len(candidate)
+	}
+	return nil
 }
 
 func NewICEAgent(urls []*stun.URI, options ...ice.AgentOption) (*ice.Agent, error) {
