@@ -123,6 +123,14 @@ func (p *Pool) signalChanged() {
 }
 
 func (p *Pool) Open(ctx context.Context, address string) (*Stream, error) {
+	return p.open(ctx, address, false)
+}
+
+func (p *Pool) OpenDatagram(ctx context.Context, address string) (*Stream, error) {
+	return p.open(ctx, address, true)
+}
+
+func (p *Pool) open(ctx context.Context, address string, datagram bool) (*Stream, error) {
 	if len(p.slots) == 0 {
 		return nil, errors.New("proxy session pool is empty")
 	}
@@ -136,7 +144,13 @@ func (p *Pool) Open(ctx context.Context, address string) (*Stream, error) {
 				lastErr = ErrClosed
 				continue
 			}
-			stream, err := session.Open(ctx, address)
+			var stream *Stream
+			var err error
+			if datagram {
+				stream, err = session.OpenDatagram(ctx, address)
+			} else {
+				stream, err = session.Open(ctx, address)
+			}
 			if err == nil {
 				return stream, nil
 			}

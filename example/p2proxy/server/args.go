@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"flag"
 	"time"
+
+	"github.com/anyshake/telekit/example/p2proxy/common"
 )
 
 type arguments struct {
@@ -27,7 +29,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.baseTopic, "mqtt-base-topic", "telekit", "MQTT base topic")
 	flag.StringVar(&args.room, "room", "p2proxy-demo", "room ID")
 	flag.StringVar(&args.secret, "secret", "change-me", "pre-shared passphrase")
-	flag.StringVar(&args.identitySeed, "identity-seed", defaultIdentitySeed, "Ed25519 server identity seed (hex)")
+	flag.StringVar(&args.identitySeed, "identity-seed", common.DefaultIdentitySeed, "Ed25519 server identity seed (hex)")
 	flag.DurationVar(&args.dialTimeout, "dial-timeout", 15*time.Second, "target TCP dial timeout")
 	flag.StringVar(&args.dnsServer, "dns", "1.1.1.1:53", "upstream DNS address (UDP)")
 	flag.DurationVar(&args.dnsTimeout, "dns-timeout", 3*time.Second, "timeout for upstream DNS querying")

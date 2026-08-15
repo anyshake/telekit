@@ -8,6 +8,7 @@ import (
 
 const (
 	frameOpen byte = iota + 1
+	frameOpenDatagram
 	frameOpenOK
 	frameOpenError
 	frameData
@@ -23,8 +24,9 @@ const (
 var ErrClosed = net.ErrClosed
 
 type Request struct {
-	Address string
-	Stream  *Stream
+	Address  string
+	Stream   *Stream
+	Datagram bool
 }
 
 type Session struct {

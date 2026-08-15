@@ -24,13 +24,22 @@ func handleSOCKS(ctx context.Context, local net.Conn, pool *protocol.Pool) {
 	if err := socksHandshake(local); err != nil {
 		return
 	}
-	target, err := readSOCKSRequest(local)
+	command, target, err := readSOCKSRequest(local)
 	if err != nil {
 		_ = writeSOCKSReply(local, 1)
 		return
 	}
+	if command != 1 && command != 5 {
+		_ = writeSOCKSReply(local, 7)
+		return
+	}
 	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	stream, err := pool.Open(openCtx, target)
+	var stream *protocol.Stream
+	if command == 5 {
+		stream, err = pool.OpenDatagram(openCtx, target)
+	} else {
+		stream, err = pool.Open(openCtx, target)
+	}
 	cancel()
 	if err != nil {
 		_ = writeSOCKSReply(local, 5)

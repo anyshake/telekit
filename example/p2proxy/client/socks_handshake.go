@@ -29,46 +29,46 @@ func socksHandshake(conn net.Conn) error {
 	return err
 }
 
-func readSOCKSRequest(conn net.Conn) (string, error) {
+func readSOCKSRequest(conn net.Conn) (byte, string, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(conn, header[:]); err != nil {
-		return "", err
+		return 0, "", err
 	}
-	if header[0] != 5 || header[1] != 1 || header[2] != 0 {
-		return "", errors.New("only SOCKS5 CONNECT is supported")
+	if header[0] != 5 || header[2] != 0 {
+		return 0, "", errors.New("invalid SOCKS5 request")
 	}
 	var host string
 	switch header[3] {
 	case 1:
 		address := make([]byte, 4)
 		if _, err := io.ReadFull(conn, address); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = net.IP(address).String()
 	case 3:
 		var length [1]byte
 		if _, err := io.ReadFull(conn, length[:]); err != nil || length[0] == 0 {
-			return "", errors.New("invalid SOCKS5 domain")
+			return 0, "", errors.New("invalid SOCKS5 domain")
 		}
 		address := make([]byte, length[0])
 		if _, err := io.ReadFull(conn, address); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = string(address)
 	case 4:
 		address := make([]byte, 16)
 		if _, err := io.ReadFull(conn, address); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = net.IP(address).String()
 	default:
-		return "", errors.New("unsupported SOCKS5 address type")
+		return 0, "", errors.New("unsupported SOCKS5 address type")
 	}
 	var port [2]byte
 	if _, err := io.ReadFull(conn, port[:]); err != nil {
-		return "", err
+		return 0, "", err
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(port[:])))), nil
+	return header[1], net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(port[:])))), nil
 }
 
 func writeSOCKSReply(conn net.Conn, code byte) error {

@@ -42,6 +42,14 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Open(ctx context.Context, address string) (*Stream, error) {
+	return s.open(ctx, address, frameOpen)
+}
+
+func (s *Session) OpenDatagram(ctx context.Context, address string) (*Stream, error) {
+	return s.open(ctx, address, frameOpenDatagram)
+}
+
+func (s *Session) open(ctx context.Context, address string, kind byte) (*Stream, error) {
 	if len(address) == 0 || len(address) > maxTargetLength {
 		return nil, errors.New("proxy target is invalid")
 	}
@@ -55,7 +63,7 @@ func (s *Session) Open(ctx context.Context, address string) (*Stream, error) {
 	stream := newStream(s, id)
 	stream.openResult = make(chan error, 1)
 	s.addStream(stream)
-	if err := s.send(frameOpen, id, []byte(address)); err != nil {
+	if err := s.send(kind, id, []byte(address)); err != nil {
 		stream.failOpen(err)
 		return nil, err
 	}
@@ -173,7 +181,7 @@ func (s *Session) readLoop() {
 
 func (s *Session) handleFrame(kind byte, id uint32, payload []byte) {
 	switch kind {
-	case frameOpen:
+	case frameOpen, frameOpenDatagram:
 		if len(payload) == 0 || len(payload) > maxTargetLength {
 			_ = s.send(frameOpenError, id, []byte("invalid proxy target"))
 			return
@@ -184,7 +192,7 @@ func (s *Session) handleFrame(kind byte, id uint32, payload []byte) {
 		}
 		stream := newStream(s, id)
 		s.addStream(stream)
-		request := &Request{Address: string(payload), Stream: stream}
+		request := &Request{Address: string(payload), Stream: stream, Datagram: kind == frameOpenDatagram}
 		select {
 		case s.requests <- request:
 		case <-s.done:
