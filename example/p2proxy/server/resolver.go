@@ -16,6 +16,7 @@ type dnsCacheEntry struct {
 
 type dnsResolver struct {
 	resolver *net.Resolver
+	upstream string
 	ttl      time.Duration
 
 	mu    sync.Mutex
@@ -40,8 +41,9 @@ func newDNSResolver(upstream string, timeout time.Duration) (*dnsResolver, error
 				return dialer.DialContext(ctx, network, upstream)
 			},
 		},
-		ttl:   30 * time.Second,
-		cache: make(map[string]dnsCacheEntry),
+		upstream: upstream,
+		ttl:      30 * time.Second,
+		cache:    make(map[string]dnsCacheEntry),
 	}, nil
 }
 

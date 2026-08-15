@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/anyshake/telekit/example/p2proxy/protocol"
@@ -21,7 +23,7 @@ func serveTunnel(conn net.Conn, pool *requestPool) {
 			return
 		}
 		if request.Datagram {
-			go serveUDPTunnel(context.Background(), request)
+			go serveUDPTunnel(context.Background(), request, pool.resolver.upstream)
 			continue
 		}
 		if !pool.Submit(request) {
@@ -31,7 +33,7 @@ func serveTunnel(conn net.Conn, pool *requestPool) {
 	}
 }
 
-func serveUDPTunnel(ctx context.Context, request *protocol.Request) {
+func serveUDPTunnel(ctx context.Context, request *protocol.Request, dnsUpstream string) {
 	stream := request.Stream
 	defer stream.Close()
 	packet, err := net.ListenPacket("udp", ":0")
@@ -44,6 +46,8 @@ func serveUDPTunnel(ctx context.Context, request *protocol.Request) {
 		return
 	}
 
+	var dnsMu sync.Mutex
+	dnsTargets := make(map[uint16][]string)
 	errs := make(chan error, 2)
 	go func() {
 		for {
@@ -52,7 +56,23 @@ func serveUDPTunnel(ctx context.Context, request *protocol.Request) {
 				errs <- err
 				return
 			}
-			addr, err := net.ResolveUDPAddr("udp", target)
+			isDNS, err := isDNSAddress(target)
+			if err != nil {
+				errs <- err
+				return
+			}
+			relayTarget, err := rewriteDNSAddress(target, dnsUpstream)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if isDNS && len(payload) >= 2 {
+				id := binary.BigEndian.Uint16(payload[:2])
+				dnsMu.Lock()
+				dnsTargets[id] = append(dnsTargets[id], target)
+				dnsMu.Unlock()
+			}
+			addr, err := net.ResolveUDPAddr("udp", relayTarget)
 			if err != nil {
 				errs <- err
 				return
@@ -76,7 +96,27 @@ func serveUDPTunnel(ctx context.Context, request *protocol.Request) {
 				errs <- fmt.Errorf("unexpected UDP address type %T", addr)
 				return
 			}
-			if err := protocol.WriteUDPFrame(stream, udpAddr, buffer[:n]); err != nil {
+			responseAddr := udpAddr
+			if n >= 2 {
+				id := binary.BigEndian.Uint16(buffer[:2])
+				var originalTarget string
+				dnsMu.Lock()
+				if targets := dnsTargets[id]; len(targets) > 0 {
+					originalTarget = targets[0]
+					if len(targets) == 1 {
+						delete(dnsTargets, id)
+					} else {
+						dnsTargets[id] = targets[1:]
+					}
+				}
+				dnsMu.Unlock()
+				if originalTarget != "" {
+					if originalAddr, resolveErr := net.ResolveUDPAddr("udp", originalTarget); resolveErr == nil {
+						responseAddr = originalAddr
+					}
+				}
+			}
+			if err := protocol.WriteUDPFrame(stream, responseAddr, buffer[:n]); err != nil {
 				errs <- err
 				return
 			}
@@ -92,7 +132,13 @@ func serveUDPTunnel(ctx context.Context, request *protocol.Request) {
 func serveRequest(ctx context.Context, request *protocol.Request, resolver *dnsResolver, dialTimeout time.Duration) {
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	remote, err := resolver.dial(dialCtx, request.Address, dialTimeout)
+	target, err := rewriteDNSAddress(request.Address, resolver.upstream)
+	if err != nil {
+		_ = request.Stream.Reject(err)
+		_ = request.Stream.Close()
+		return
+	}
+	remote, err := resolver.dial(dialCtx, target, dialTimeout)
 	if err != nil {
 		_ = request.Stream.Reject(err)
 		_ = request.Stream.Close()
@@ -126,4 +172,23 @@ func serveRequest(ctx context.Context, request *protocol.Request, resolver *dnsR
 	}
 	<-responseDone
 	_ = request.Stream.Close()
+}
+
+func isDNSAddress(address string) (bool, error) {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return false, err
+	}
+	return port == "53", nil
+}
+
+func rewriteDNSAddress(address, upstream string) (string, error) {
+	isDNS, err := isDNSAddress(address)
+	if err != nil {
+		return "", err
+	}
+	if isDNS {
+		return upstream, nil
+	}
+	return address, nil
 }

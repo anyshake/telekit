@@ -31,7 +31,7 @@ func parseCliArguments() *arguments {
 	flag.StringVar(&args.secret, "secret", "change-me", "pre-shared passphrase")
 	flag.StringVar(&args.identitySeed, "identity-seed", common.DefaultIdentitySeed, "Ed25519 server identity seed (hex)")
 	flag.DurationVar(&args.dialTimeout, "dial-timeout", 15*time.Second, "target TCP dial timeout")
-	flag.StringVar(&args.dnsServer, "dns", "1.1.1.1:53", "upstream DNS address (UDP)")
+	flag.StringVar(&args.dnsServer, "dns", "1.1.1.1:53", "upstream DNS address for port-53 UDP/TCP traffic")
 	flag.DurationVar(&args.dnsTimeout, "dns-timeout", 3*time.Second, "timeout for upstream DNS querying")
 	flag.IntVar(&args.workers, "workers", 128, "proxy target request worker count")
 	flag.IntVar(&args.requestQueue, "request-queue", 1024, "maximum queued proxy target requests")
