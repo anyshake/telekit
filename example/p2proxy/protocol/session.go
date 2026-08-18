@@ -65,6 +65,9 @@ func (s *Session) open(ctx context.Context, address string, kind byte) (*Stream,
 	s.addStream(stream)
 	if err := s.send(kind, id, []byte(address)); err != nil {
 		stream.failOpen(err)
+		if !errors.Is(err, ErrClosed) {
+			err = fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
 		return nil, err
 	}
 	select {

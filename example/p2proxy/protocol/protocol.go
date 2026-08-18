@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,11 @@ const (
 )
 
 var ErrClosed = net.ErrClosed
+
+// ErrUnavailable indicates that a session's underlying transport is being
+// re-established. Callers may retry the operation on another session or wait
+// for this session to become usable again.
+var ErrUnavailable = errors.New("proxy session unavailable")
 
 type Request struct {
 	Address  string

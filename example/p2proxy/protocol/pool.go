@@ -5,7 +5,10 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+const poolRetryInterval = 100 * time.Millisecond
 
 // Pool distributes independent virtual streams over several authenticated
 // sessions. A target TCP connection is still created per stream; sessions
@@ -137,11 +140,11 @@ func (p *Pool) open(ctx context.Context, address string, datagram bool) (*Stream
 	for {
 		start := int(p.next.Add(1)-1) % len(p.slots)
 		var lastErr error
-		allClosed := true
+		allUnavailable := true
 		for offset := 0; offset < len(p.slots); offset++ {
 			session := p.slots[(start+offset)%len(p.slots)].current()
 			if session == nil {
-				lastErr = ErrClosed
+				lastErr = ErrUnavailable
 				continue
 			}
 			var stream *Stream
@@ -155,19 +158,24 @@ func (p *Pool) open(ctx context.Context, address string, datagram bool) (*Stream
 				return stream, nil
 			}
 			lastErr = err
-			if !errors.Is(err, ErrClosed) {
-				allClosed = false
+			if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrUnavailable) {
+				allUnavailable = false
 			}
 		}
-		if !allClosed {
+		if !allUnavailable {
 			return nil, lastErr
 		}
+		retry := time.NewTimer(poolRetryInterval)
 		select {
 		case <-ctx.Done():
+			retry.Stop()
 			return nil, ctx.Err()
 		case <-p.done:
+			retry.Stop()
 			return nil, ErrClosed
 		case <-p.changed:
+			retry.Stop()
+		case <-retry.C:
 		}
 	}
 }
