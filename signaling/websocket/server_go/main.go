@@ -11,7 +11,12 @@ import (
 )
 
 func main() {
-	addr := os.Getenv("ADDR")
+	token := os.Getenv("WS_SERVER_TOKEN")
+	if token == "" {
+		token = "passme"
+	}
+
+	addr := os.Getenv("WS_SERVER_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
@@ -29,7 +34,7 @@ func main() {
 			if !query.Has("token") || roomID == "" {
 				return false
 			}
-			return strings.TrimSpace(query.Get("token")) == "passme"
+			return strings.TrimSpace(query.Get("token")) == token
 		}),
 	)
 
