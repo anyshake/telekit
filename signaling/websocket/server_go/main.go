@@ -38,7 +38,7 @@ func main() {
 		}),
 	)
 
-	router.GET("/ws/:room", func(c *gin.Context) {
+	router.GET("/telekit-rooms/:room", func(c *gin.Context) {
 		room := c.Param("room")
 		c.Request.URL.Path = "/" + room
 		wsBroker.ServeHTTP(c.Writer, c.Request)
