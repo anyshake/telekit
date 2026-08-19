@@ -378,14 +378,14 @@ func (c *Client) readRawTransport(conn net.Conn, dataChannel *peer.DataChannel, 
 }
 
 func (c *Client) monitorTransport(conn net.Conn, dataChannel *peer.DataChannel) {
-	ticker := time.NewTicker(transportKeepaliveInterval)
+	ticker := time.NewTicker(c.options.HeartbeatInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		if !c.isCurrentTransport(conn, dataChannel) {
 			return
 		}
 		lastRead := time.Unix(0, c.lastTransportRead.Load())
-		if c.options.GetTimeFunc().Sub(lastRead) >= transportKeepaliveTimeout {
+		if c.options.GetTimeFunc().Sub(lastRead) >= c.options.HeartbeatTimeout {
 			_ = c.finishTransport(conn, dataChannel)
 			return
 		}

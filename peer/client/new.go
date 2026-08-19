@@ -38,6 +38,12 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	if options.Timeout == 0 {
 		options.Timeout = DEFAULT_TIMEOUT
 	}
+	if options.HeartbeatInterval == 0 {
+		options.HeartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL
+	}
+	if options.HeartbeatTimeout == 0 {
+		options.HeartbeatTimeout = DEFAULT_HEARTBEAT_TIMEOUT
+	}
 	if options.Transport == nil {
 		options.Transport = transportquic.New()
 	}
@@ -56,7 +62,8 @@ func NewClient(psk peer.PreSharedKey, api *api.API, options *Options) (*Client, 
 	if options.MaxPendingICEBytes == 0 {
 		options.MaxPendingICEBytes = DEFAULT_MAX_PENDING_ICE_BYTES
 	}
-	if options.MaxFrameSize < 1024 || options.ReceiveBufferSize < options.MaxFrameSize ||
+	if options.HeartbeatInterval <= 0 || options.HeartbeatTimeout <= 0 ||
+		options.MaxFrameSize < 1024 || options.ReceiveBufferSize < options.MaxFrameSize ||
 		options.MaxPendingICE < 1 || options.MaxPendingICEBytes < 1 {
 		return nil, errors.New("invalid client resource limits")
 	}

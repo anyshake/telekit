@@ -18,8 +18,8 @@ const (
 	DEFAULT_MAX_FRAME_SIZE        = 4 << 20
 	DEFAULT_MAX_PENDING_ICE       = 128
 	DEFAULT_MAX_PENDING_ICE_BYTES = 256 << 10
-	transportKeepaliveInterval    = 5 * time.Second
-	transportKeepaliveTimeout     = 15 * time.Second
+	DEFAULT_HEARTBEAT_INTERVAL    = 5 * time.Second
+	DEFAULT_HEARTBEAT_TIMEOUT     = 15 * time.Second
 )
 
 type Options struct {
@@ -30,6 +30,13 @@ type Options struct {
 	GetTimeFunc func() time.Time
 	// Timeout is the maximum time to wait for a connection to be established.
 	Timeout time.Duration
+	// HeartbeatInterval is the interval between transport heartbeat frames.
+	// Zero uses DEFAULT_HEARTBEAT_INTERVAL.
+	HeartbeatInterval time.Duration
+	// HeartbeatTimeout is the maximum time without receiving a valid transport
+	// frame before the connection is considered lost. Zero uses
+	// DEFAULT_HEARTBEAT_TIMEOUT.
+	HeartbeatTimeout time.Duration
 	// Transport selects the data transport negotiated after ICE. Nil defaults to
 	// the reliable QUIC transport.
 	Transport transports.ITransport

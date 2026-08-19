@@ -11,11 +11,6 @@ import (
 	"github.com/pion/ice/v4"
 )
 
-const (
-	transportKeepaliveInterval = 5 * time.Second
-	transportKeepaliveTimeout  = 15 * time.Second
-)
-
 func (c *Connection) LocalAddr() net.Addr {
 	c.stateMu.RLock()
 	address := c.localAddr

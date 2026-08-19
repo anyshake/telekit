@@ -95,6 +95,12 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 	if options.HandshakeTimeout == 0 {
 		options.HandshakeTimeout = DEFAULT_HANDSHAKE_TIMEOUT
 	}
+	if options.HeartbeatInterval == 0 {
+		options.HeartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL
+	}
+	if options.HeartbeatTimeout == 0 {
+		options.HeartbeatTimeout = DEFAULT_HEARTBEAT_TIMEOUT
+	}
 	if options.HelloRateLimit == 0 {
 		options.HelloRateLimit = 100
 	}
@@ -106,6 +112,7 @@ func NewServer(api *api.API, options *Options) (*Server, error) {
 		options.MaxPendingICEBytes < 1 ||
 		options.MaxConnections < 1 || options.MaxPendingHandshakes < 1 ||
 		options.MaxPendingHandshakes > options.MaxConnections || options.HandshakeTimeout <= 0 ||
+		options.HeartbeatInterval <= 0 || options.HeartbeatTimeout <= 0 ||
 		options.HelloRateLimit <= 0 || options.HelloRateBurst < 1 {
 		return nil, errors.New("invalid server resource limits")
 	}

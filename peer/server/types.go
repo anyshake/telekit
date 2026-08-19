@@ -29,6 +29,8 @@ const (
 	DEFAULT_MAX_CONNECTIONS       = 1024
 	DEFAULT_MAX_HANDSHAKES        = 256
 	DEFAULT_MAX_BUFFERED          = 256 << 20
+	DEFAULT_HEARTBEAT_INTERVAL    = 5 * time.Second
+	DEFAULT_HEARTBEAT_TIMEOUT     = 15 * time.Second
 )
 
 type Options struct {
@@ -73,6 +75,13 @@ type Options struct {
 	MaxPendingHandshakes int
 	// HandshakeTimeout limits the lifetime of a pending handshake.
 	HandshakeTimeout time.Duration
+	// HeartbeatInterval is the interval between transport heartbeat frames.
+	// Zero uses DEFAULT_HEARTBEAT_INTERVAL.
+	HeartbeatInterval time.Duration
+	// HeartbeatTimeout is the maximum time without receiving a valid transport
+	// frame before the connection is considered lost. Zero uses
+	// DEFAULT_HEARTBEAT_TIMEOUT.
+	HeartbeatTimeout time.Duration
 	// HelloRateLimit is the sustained ClientHello rate accepted by the server.
 	HelloRateLimit float64
 	// HelloRateBurst is the maximum initial ClientHello burst.

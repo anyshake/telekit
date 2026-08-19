@@ -284,14 +284,14 @@ func (s *Server) handleICEOffer(conn *Connection, remote transportcore.ICEDescri
 }
 
 func monitorTransport(conn *Connection, transportConn net.Conn, dataChannel *peer.DataChannel) {
-	ticker := time.NewTicker(transportKeepaliveInterval)
+	ticker := time.NewTicker(conn.owner.options.HeartbeatInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		if !conn.isCurrentTransport(transportConn, dataChannel) {
 			return
 		}
 		lastRead := time.Unix(0, conn.lastTransportRead.Load())
-		if conn.owner.options.GetTimeFunc().Sub(lastRead) >= transportKeepaliveTimeout {
+		if conn.owner.options.GetTimeFunc().Sub(lastRead) >= conn.owner.options.HeartbeatTimeout {
 			_ = conn.Close()
 			return
 		}
